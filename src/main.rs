@@ -35,6 +35,8 @@ fn main() {
     );
     let sumocfg = &CONFIG.sumo.sumocfg;
 
+    info!("Loading SUMO");
+
     let sumo = match Sumo::load(sumocfg) {
         Ok(sumo) => sumo,
         Err(e) => {
@@ -47,6 +49,7 @@ fn main() {
     info!("step_length: {}ms", sumo.step_length().unwrap());
     info!("net-file: {}", sumo.net_file().unwrap());
     info!("route-files: {}", sumo.route_files().unwrap());
+
     info!("Inited SUMO");
     let mut simluator = Simluator::init(sumo);
     info!("Inited Simluator");
@@ -57,10 +60,8 @@ fn main() {
         if (simluator.step_current % CONFIG.log_interval) == 0 {
             let end = global_start.elapsed();
             let simluation_elapsed = simluator.step_current * simluator.step;
-            info!(
-                "loaded {} vechines",
-                simluator.vehicle_list().unwrap().len()
-            );
+            let vehicles = simluator.vehicle_list().unwrap();
+            info!("loaded {} vechines", vehicles.len());
             info!(
                 "setp: {} simulation time: {}ms cost: {}ms procress: {:.2}% rate:{:.2}x",
                 simluator.step_current,

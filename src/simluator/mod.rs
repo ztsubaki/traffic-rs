@@ -1,9 +1,14 @@
-use std::str::FromStr;
+mod net;
+mod v2x;
+
+use std::{ffi::CStr, str::FromStr};
 
 use crate::Sumo;
+use net::Net;
 
 pub struct Simluator {
     sumo: Sumo,
+    net: Net,
     pub time_begin: usize,
     pub time_end: usize,
     pub step: usize,
@@ -15,8 +20,16 @@ impl Simluator {
         let time_begin = sumo.time_begin().unwrap();
         let time_end = sumo.time_end().unwrap();
         let step = sumo.step_length().unwrap();
+        let edges = sumo.get_edges().unwrap();
+        let mut net = Net::new();
+        for (id, edge) in edges.as_slice().iter().enumerate() {
+            net.edges
+                .insert(unsafe { CStr::from_ptr(edge.id).to_owned() }, id);
+        }
+        log::info!("Loaded {} edges", net.edges.len());
         Simluator {
             sumo,
+            net,
             time_begin,
             time_end,
             step,
@@ -44,6 +57,16 @@ impl Simluator {
     }
 
     pub fn vehicle_list(&self) -> Result<Vec<String>, String> {
-        self.sumo.vechine_get_id_list()
+        let vec = self.sumo.get_vehicles()?;
+        let mut strings: Vec<String> = Vec::new();
+        for vechicle in vec.as_slice() {
+            strings.push(
+                unsafe { CStr::from_ptr(vechicle.id) }
+                    .to_str()
+                    .unwrap()
+                    .to_owned(),
+            );
+        }
+        Ok(strings)
     }
 }
