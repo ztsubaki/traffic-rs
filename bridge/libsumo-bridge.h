@@ -19,6 +19,18 @@ struct Vehicle {
 };
 struct Edge {
     char* id;
+    char* name;
+    char* from;
+    char* to;
+    size_t lane_number;
+};
+struct Junction {
+    char* id;
+};
+struct Lane {
+    char* id;
+    char* edge_id;
+    double length;
 };
 struct Payload sumo_load(const char* cfg);
 struct Payload sumo_step();
@@ -27,6 +39,8 @@ struct Payload get_parameter(char* obj, char* para);
 struct Payload get_option(char* opt);
 struct Payload get_vehicles();
 struct Payload get_edges();
+struct Payload get_junctions();
+struct Payload get_lanes();
 #ifdef __cplusplus
 }
 #endif

@@ -8,6 +8,8 @@
 #include <cstring>
 
 #include "libsumo/Edge.h"
+#include "libsumo/Junction.h"
+#include "libsumo/Lane.h"
 #include "libsumo/Simulation.h"
 #include "libsumo/Vehicle.h"
 
@@ -127,9 +129,24 @@ Payload get_edges() {
         if (edges == NULL) return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
         size = edges_vec.size();
         for (size_t i = 0; i < size; i++) {
+            std::string name = libsumo::Edge::getStreetName(edges_vec[i]);
+            std::string from =
+                libsumo::Edge::getFromJunction(edges_vec[i].c_str());
+            std::string to = libsumo::Edge::getToJunction(edges_vec[i].c_str());
+            int lane_number =
+                libsumo::Edge::getLaneNumber(edges_vec[i].c_str());
             edges[i].id = strdup(edges_vec[i].c_str());
-            if (edges[i].id == NULL) {
-                for (size_t j = 0; j < i; j++) free(edges[j].id);
+            edges[i].name = strdup(name.c_str());
+            edges[i].from = strdup(from.c_str());
+            edges[i].to = strdup(to.c_str());
+            edges[i].lane_number = lane_number;
+            if (edges[i].id == NULL || edges[i].name == NULL) {
+                for (size_t j = 0; j < i; j++) {
+                    free(edges[j].id);
+                    free(edges[j].name);
+                    free(edges[j].from);
+                    free(edges[j].to);
+                }
                 free(edges);
                 return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
             }
@@ -138,4 +155,62 @@ Payload get_edges() {
         return report_exception(e);
     }
     return Payload{BRIDGE_SUCCESS, (void*)edges, size};
+}
+
+Payload get_junctions() {
+    Junction* junctions = NULL;
+    size_t size = 0;
+    try {
+        auto junctions_vec = libsumo::Junction::getIDList();
+        if (junctions_vec.size() == 0) {
+            return Payload{BRIDGE_SUCCESS, 0, 0};
+        }
+        junctions = (Junction*)malloc(junctions_vec.size() * sizeof(Junction));
+        if (junctions == NULL) return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
+        size = junctions_vec.size();
+        for (size_t i = 0; i < size; i++) {
+            junctions[i].id = strdup(junctions_vec[i].c_str());
+            if (junctions[i].id == NULL) {
+                for (size_t j = 0; j < i; j++) free(junctions[j].id);
+                free(junctions);
+                return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
+            }
+        }
+    } catch (const std::exception& e) {
+        return report_exception(e);
+    }
+    return Payload{BRIDGE_SUCCESS, (void*)junctions, size};
+}
+
+Payload get_lanes() {
+    Lane* lanes = NULL;
+    size_t size = 0;
+    try {
+        auto lanes_vec = libsumo::Lane::getIDList();
+        if (lanes_vec.size() == 0) {
+            return Payload{BRIDGE_SUCCESS, 0, 0};
+        }
+        lanes = (Lane*)malloc(lanes_vec.size() * sizeof(Lane));
+        if (lanes == NULL) return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
+        size = lanes_vec.size();
+        for (size_t i = 0; i < size; i++) {
+            std::string edge_id =
+                libsumo::Lane::getEdgeID(lanes_vec[i].c_str());
+            double length = libsumo::Lane::getLength(lanes_vec[i].c_str());
+            lanes[i].id = strdup(lanes_vec[i].c_str());
+            lanes[i].edge_id = strdup(edge_id.c_str());
+            lanes[i].length = length;
+            if (lanes[i].id == NULL || lanes[i].edge_id == NULL) {
+                for (size_t j = 0; j < i; j++) {
+                    free(lanes[j].id);
+                    free(lanes[j].edge_id);
+                }
+                free(lanes);
+                return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
+            }
+        }
+    } catch (const std::exception& e) {
+        return report_exception(e);
+    }
+    return Payload{BRIDGE_SUCCESS, (void*)lanes, size};
 }

@@ -22,11 +22,20 @@ impl Simluator {
         let step = sumo.step_length().unwrap();
         let edges = sumo.get_edges().unwrap();
         let mut net = Net::new();
-        for (id, edge) in edges.as_slice().iter().enumerate() {
-            net.edges
-                .insert(unsafe { CStr::from_ptr(edge.id).to_owned() }, id);
+        let junctions = sumo.get_junctions().unwrap();
+        for junction in junctions.as_slice() {
+            net.new_junction(junction);
         }
-        log::info!("Loaded {} edges", net.edges.len());
+        log::info!("Loaded {} junctions", net.junction_count());
+        for edge in edges.as_slice() {
+            net.new_edge(edge);
+        }
+        log::info!("Loaded {} edges", net.edge_count());
+        let lanes = sumo.get_lanes().unwrap();
+        for lane in lanes.as_slice() {
+            net.new_lane(lane);
+        }
+        log::info!("Loaded {} lanes", net.lane_count());
         Simluator {
             sumo,
             net,

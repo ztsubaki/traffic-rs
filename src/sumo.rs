@@ -36,12 +36,48 @@ impl Drop for Vehicle {
 #[repr(C)]
 pub struct Edge {
     pub id: *const c_char,
+    pub name: *const c_char,
+    pub from: *const c_char,
+    pub to: *const c_char,
+    pub lane_number: usize,
 }
 
 impl Drop for Edge {
     fn drop(&mut self) {
         unsafe {
             libc::free(self.id as *mut c_void);
+            libc::free(self.name as *mut c_void);
+            libc::free(self.from as *mut c_void);
+            libc::free(self.to as *mut c_void);
+        }
+    }
+}
+
+#[repr(C)]
+pub struct Junction {
+    pub id: *const c_char,
+}
+
+impl Drop for Junction {
+    fn drop(&mut self) {
+        unsafe {
+            libc::free(self.id as *mut c_void);
+        }
+    }
+}
+
+#[repr(C)]
+pub struct Lane {
+    pub id: *const c_char,
+    pub edge_id: *const c_char,
+    pub length: f64,
+}
+
+impl Drop for Lane {
+    fn drop(&mut self) {
+        unsafe {
+            libc::free(self.id as *mut c_void);
+            libc::free(self.edge_id as *mut c_void);
         }
     }
 }
@@ -53,13 +89,13 @@ pub struct CVec<T> {
 
 impl<T> CVec<T> {
     pub fn as_slice(&self) -> &[T] {
-        if self.len == 0{
+        if self.len == 0 {
             return &[];
         }
         unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
     }
     pub fn as_mut_slice(&mut self) -> &mut [T] {
-        if self.len == 0{
+        if self.len == 0 {
             return &mut [];
         }
         unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
@@ -88,6 +124,8 @@ unsafe extern "C" {
     fn get_option(opt: *const c_char) -> Payload;
     fn get_edges() -> Payload;
     fn get_vehicles() -> Payload;
+    fn get_junctions() -> Payload;
+    fn get_lanes() -> Payload;
 }
 
 const BRIDGE_SUCCESS: usize = 0;
@@ -111,7 +149,9 @@ impl Sumo {
             )
         }) {
             Err(e) => Err(e),
-            Ok(()) => Ok(Sumo {_not_thread_safe:PhantomData}),
+            Ok(()) => Ok(Sumo {
+                _not_thread_safe: PhantomData,
+            }),
         }
     }
     pub fn step_length(&self) -> Result<usize, String> {
@@ -156,6 +196,13 @@ impl Sumo {
     pub fn get_vehicles(&self) -> Result<CVec<Vehicle>, String> {
         resolve_c_result_with_vec_payload(unsafe { get_vehicles() })
     }
+    pub fn get_junctions(&self) -> Result<CVec<Junction>, String> {
+        resolve_c_result_with_vec_payload(unsafe { get_junctions() })
+    }
+    pub fn get_lanes(&self) -> Result<CVec<Lane>, String> {
+        resolve_c_result_with_vec_payload(unsafe { get_lanes() })
+    }
+    #[allow(unused)]
     fn get_parameter(&self, obj: &str, para: &str) -> Result<String, String> {
         match resolve_c_result_with_payload(unsafe {
             get_parameter(
