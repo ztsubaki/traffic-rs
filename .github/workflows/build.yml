@@ -1,0 +1,81 @@
+name: Preview builder
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-26.04
+    steps:
+    - uses: actions/checkout@v7
+    - name: Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y sumo clang-format
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+    - uses: Swatinem/rust-cache@v2
+    - name: Clang format check
+      run: |
+        find bridge \
+          \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) \
+          -print0 |
+        xargs -0 clang-format --dry-run --Werror
+    - name: Cargo fmt check
+      run: cargo fmt --all -- --check
+    - name: Cargo clippy check
+      run: cargo clippy --workspace --all-targets
+
+  build:
+    needs: check
+    permissions:
+      contents: write
+    runs-on: ubuntu-26.04
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        submodules: recursive
+    - name: Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y sumo
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    - name: Cargo build
+      run: cargo build --release
+    - name: Package
+      run: |
+        mkdir traffic-rs
+        mv ./target/release/traffic-rs ./traffic-rs/
+        tar -czf ./traffic-rs-linux-x86_64.tar.gz ./traffic-rs
+    - uses: actions/upload-artifact@v7
+      with:
+        name: build-output
+        path: ./traffic-rs-linux-x86_64.tar.gz
+    - name: Update preview release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if ! gh release view preview >/dev/null 2>&1; then
+          git tag preview "${GITHUB_SHA}"
+          git push origin preview
+
+          gh release create preview \
+            --title "Preview Build" \
+            --prerelease \
+            --latest=false \
+            --notes "Automatically updated preview build."
+        else
+          git tag -f preview "${GITHUB_SHA}"
+          git push origin preview --force
+        fi
+
+        gh release upload preview \
+          traffic-rs-linux-x86_64.tar.gz \
+          --clobber

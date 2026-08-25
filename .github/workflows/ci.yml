@@ -1,0 +1,33 @@
+name: CI Checker
+
+on:
+  push:
+    branches:
+      - '**'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-26.04
+    steps:
+    - uses: actions/checkout@v7
+    - name: Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y sumo clang-format
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+    - uses: Swatinem/rust-cache@v2
+    - name: Clang format check
+      run: |
+        find bridge \
+          \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) \
+          -print0 |
+        xargs -0 clang-format --dry-run --Werror
+    - name: Cargo fmt check
+      run: cargo fmt --all -- --check
+    - name: Cargo clippy check
+      run: cargo clippy --workspace --all-targets -- -D warnings
