@@ -36,6 +36,20 @@ impl Simluator {
             net.new_lane(lane);
         }
         log::info!("Loaded {} lanes", net.lane_count());
+        let trafficlights = sumo.get_trafficlights().unwrap();
+        for trafficlight in trafficlights.as_slice() {
+            net.new_trafficlight(trafficlight);
+        }
+        log::info!("Loaded {} trafficlights", net.trafficlight_count());
+        let links = sumo.get_links().unwrap();
+        for link in links.as_slice() {
+            net.new_link(link);
+        }
+        log::info!(
+            "Loaded {} links with {} controlled links",
+            net.link_count().0,
+            net.link_count().1
+        );
         Simluator {
             sumo,
             net,

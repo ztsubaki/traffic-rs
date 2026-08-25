@@ -82,6 +82,39 @@ impl Drop for Lane {
     }
 }
 
+#[repr(C)]
+pub struct TrafficLight {
+    pub id: *const c_char,
+}
+
+impl Drop for TrafficLight {
+    fn drop(&mut self) {
+        unsafe {
+            libc::free(self.id as *mut c_void);
+        }
+    }
+}
+
+#[repr(C)]
+pub struct Link {
+    pub from_lane: *const c_char,
+    pub via_lane: *const c_char,
+    pub to_lane: *const c_char,
+    pub trafficlight: *const c_char,
+    pub link_index: usize,
+}
+
+impl Drop for Link {
+    fn drop(&mut self) {
+        unsafe {
+            libc::free(self.from_lane as *mut c_void);
+            libc::free(self.via_lane as *mut c_void);
+            libc::free(self.to_lane as *mut c_void);
+            libc::free(self.trafficlight as *mut c_void);
+        }
+    }
+}
+
 pub struct CVec<T> {
     ptr: *mut T,
     len: usize,
@@ -126,6 +159,8 @@ unsafe extern "C" {
     fn get_vehicles() -> Payload;
     fn get_junctions() -> Payload;
     fn get_lanes() -> Payload;
+    fn get_trafficlights() -> Payload;
+    fn get_links() -> Payload;
 }
 
 const BRIDGE_SUCCESS: usize = 0;
@@ -199,8 +234,14 @@ impl Sumo {
     pub fn get_junctions(&self) -> Result<CVec<Junction>, String> {
         resolve_c_result_with_vec_payload(unsafe { get_junctions() })
     }
+    pub fn get_trafficlights(&self) -> Result<CVec<TrafficLight>, String> {
+        resolve_c_result_with_vec_payload(unsafe { get_trafficlights() })
+    }
     pub fn get_lanes(&self) -> Result<CVec<Lane>, String> {
         resolve_c_result_with_vec_payload(unsafe { get_lanes() })
+    }
+    pub fn get_links(&self) -> Result<CVec<Link>, String> {
+        resolve_c_result_with_vec_payload(unsafe { get_links() })
     }
     #[allow(unused)]
     fn get_parameter(&self, obj: &str, para: &str) -> Result<String, String> {

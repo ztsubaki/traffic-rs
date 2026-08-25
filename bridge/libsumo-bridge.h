@@ -32,6 +32,16 @@ struct Lane {
     char* edge_id;
     double length;
 };
+struct TrafficLight {
+    char* id;
+};
+struct Link {
+    char* from_lane;
+    char* via_lane;
+    char* to_lane;
+    char* trafficlight;
+    size_t link_index;
+};
 struct Payload sumo_load(const char* cfg);
 struct Payload sumo_step();
 struct Payload sumo_close();
@@ -41,6 +51,8 @@ struct Payload get_vehicles();
 struct Payload get_edges();
 struct Payload get_junctions();
 struct Payload get_lanes();
+struct Payload get_trafficlights();
+struct Payload get_links();
 #ifdef __cplusplus
 }
 #endif

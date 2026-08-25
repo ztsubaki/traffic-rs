@@ -6,11 +6,14 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #include "libsumo/Edge.h"
 #include "libsumo/Junction.h"
 #include "libsumo/Lane.h"
 #include "libsumo/Simulation.h"
+#include "libsumo/TrafficLight.h"
 #include "libsumo/Vehicle.h"
 
 const char* demangle(const char* name) {
@@ -213,4 +216,97 @@ Payload get_lanes() {
         return report_exception(e);
     }
     return Payload{BRIDGE_SUCCESS, (void*)lanes, size};
+}
+
+Payload get_trafficlights() {
+    TrafficLight* trafficlights = NULL;
+    size_t size = 0;
+    try {
+        auto trafficlights_vec = libsumo::TrafficLight::getIDList();
+        if (trafficlights_vec.size() == 0) {
+            return Payload{BRIDGE_SUCCESS, 0, 0};
+        }
+        trafficlights = (TrafficLight*)malloc(trafficlights_vec.size() *
+                                              sizeof(TrafficLight));
+        if (trafficlights == NULL) return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
+        size = trafficlights_vec.size();
+        for (size_t i = 0; i < size; i++) {
+            trafficlights[i].id = strdup(trafficlights_vec[i].c_str());
+            if (trafficlights[i].id == NULL) {
+                for (size_t j = 0; j < i; j++) free(trafficlights[j].id);
+                free(trafficlights);
+                return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
+            }
+        }
+    } catch (const std::exception& e) {
+        return report_exception(e);
+    }
+    return Payload{BRIDGE_SUCCESS, (void*)trafficlights, size};
+}
+
+Payload get_links() {
+    Link* links = NULL;
+    size_t size = 0;
+    std::vector<std::string> from_lanes;
+    std::vector<std::string> via_lanes;
+    std::vector<std::string> to_lanes;
+    std::vector<std::string> link_trafficlights;
+    std::vector<size_t> link_indexs;
+    try {
+        auto lanes = libsumo::Lane::getIDList();
+        for (auto id : lanes) {
+            auto lane_links = libsumo::Lane::getLinks(id);
+            for (auto link : lane_links) {
+                size++;
+                from_lanes.emplace_back(id);
+                via_lanes.emplace_back(link.approachedInternal);
+                to_lanes.emplace_back(link.approachedLane);
+                link_trafficlights.emplace_back(std::string(""));
+                link_indexs.emplace_back(0);
+            }
+        }
+        auto trafficlights = libsumo::TrafficLight::getIDList();
+        for (auto id : trafficlights) {
+            auto controled_links =
+                libsumo::TrafficLight::getControlledLinks(id);
+            for (size_t link_index = 0; link_index < controled_links.size();
+                 link_index++) {
+                for (auto link : controled_links[link_index]) {
+                    size++;
+                    from_lanes.emplace_back(link.fromLane);
+                    via_lanes.emplace_back(link.viaLane);
+                    to_lanes.emplace_back(link.toLane);
+                    link_trafficlights.emplace_back(id);
+                    link_indexs.emplace_back(link_index);
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        return report_exception(e);
+    }
+    links = (Link*)malloc(size * sizeof(Link));
+    if (links == NULL) return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
+    for (size_t i = 0; i < size; i++) {
+        links[i].from_lane = strdup(from_lanes[i].c_str());
+        links[i].via_lane = strdup(via_lanes[i].c_str());
+        links[i].to_lane = strdup(to_lanes[i].c_str());
+        links[i].link_index = link_indexs[i];
+        links[i].trafficlight = strdup(link_trafficlights[i].c_str());
+        if (links[i].from_lane == NULL || links[i].via_lane == NULL ||
+            links[i].to_lane == NULL || links[i].trafficlight == NULL) {
+            if (links[i].from_lane != NULL) free(links[i].from_lane);
+            if (links[i].via_lane != NULL) free(links[i].via_lane);
+            if (links[i].to_lane != NULL) free(links[i].to_lane);
+            if (links[i].trafficlight != NULL) free(links[i].trafficlight);
+            for (size_t j = 0; j < i; j++) {
+                free(links[j].from_lane);
+                free(links[j].via_lane);
+                free(links[j].to_lane);
+                free(links[j].trafficlight);
+            }
+            free(links);
+            return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
+        }
+    }
+    return Payload{BRIDGE_SUCCESS, (void*)links, size};
 }
