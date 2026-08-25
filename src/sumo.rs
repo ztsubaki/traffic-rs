@@ -142,7 +142,7 @@ impl<T> Drop for CVec<T> {
         }
         unsafe {
             for index in 0..self.len {
-                std::ptr::drop_in_place((self.ptr as *mut T).add(index));
+                std::ptr::drop_in_place(self.ptr.add(index));
             }
             libc::free(self.ptr as *mut c_void);
         }
@@ -180,7 +180,7 @@ impl Sumo {
             sumo_load(
                 CString::from_str(sumocfg.to_str().unwrap())
                     .unwrap()
-                    .as_ptr() as *const i8,
+                    .as_ptr(),
             )
         }) {
             Err(e) => Err(e),
@@ -247,8 +247,8 @@ impl Sumo {
     fn get_parameter(&self, obj: &str, para: &str) -> Result<String, String> {
         match resolve_c_result_with_payload(unsafe {
             get_parameter(
-                CString::new(obj).unwrap().as_ptr() as *const i8,
-                CString::new(para).unwrap().as_ptr() as *const i8,
+                CString::new(obj).unwrap().as_ptr(),
+                CString::new(para).unwrap().as_ptr(),
             )
         }) {
             Ok(payload) => {
@@ -256,9 +256,9 @@ impl Sumo {
                     .to_string_lossy()
                     .into();
                 unsafe {
-                    libc::free(payload as *mut c_void);
+                    libc::free(payload);
                 }
-                if r.len() == 0 {
+                if r.is_empty() {
                     Err("No such key".to_string())
                 } else {
                     Ok(r)
@@ -269,16 +269,16 @@ impl Sumo {
     }
     fn get_option(&self, opt: &str) -> Result<String, String> {
         match resolve_c_result_with_payload(unsafe {
-            get_option(CString::new(opt).unwrap().as_ptr() as *const i8)
+            get_option(CString::new(opt).unwrap().as_ptr())
         }) {
             Ok(payload) => {
                 let r: String = unsafe { CStr::from_ptr(payload as *const i8) }
                     .to_string_lossy()
                     .into();
                 unsafe {
-                    libc::free(payload as *mut c_void);
+                    libc::free(payload);
                 }
-                if r.len() == 0 {
+                if r.is_empty() {
                     Err("No such key".to_string())
                 } else {
                     Ok(r)
@@ -297,7 +297,7 @@ fn resolve_c_result_no_paylod(value: Payload) -> Result<(), String> {
             let mut e: String = unsafe { CStr::from_ptr(value.payload as *const i8) }
                 .to_string_lossy()
                 .into();
-            unsafe { libc::free(value.payload as *mut c_void) };
+            unsafe { libc::free(value.payload) };
             e.insert_str(0, "SUMO exception: ");
             Err(e)
         }
@@ -313,7 +313,7 @@ fn resolve_c_result_with_payload(value: Payload) -> Result<*mut c_void, String> 
             let mut e: String = unsafe { CStr::from_ptr(value.payload as *const i8) }
                 .to_string_lossy()
                 .into();
-            unsafe { libc::free(value.payload as *mut c_void) };
+            unsafe { libc::free(value.payload) };
             e.insert_str(0, "SUMO exception: ");
             Err(e)
         }
@@ -332,7 +332,7 @@ fn resolve_c_result_with_vec_payload<T>(value: Payload) -> Result<CVec<T>, Strin
             let mut e: String = unsafe { CStr::from_ptr(value.payload as *const i8) }
                 .to_string_lossy()
                 .into();
-            unsafe { libc::free(value.payload as *mut c_void) };
+            unsafe { libc::free(value.payload) };
             e.insert_str(0, "SUMO exception: ");
             Err(e)
         }

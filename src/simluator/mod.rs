@@ -68,9 +68,7 @@ impl Simluator {
         if self.is_end() {
             return Err(String::from_str("Simluation ended").unwrap());
         }
-        if let Err(e) = self.sumo.step() {
-            return Err(e);
-        }
+        self.sumo.step()?;
         self.step_current += 1;
         Ok(())
     }

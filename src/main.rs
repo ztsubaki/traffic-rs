@@ -4,7 +4,6 @@ mod sumo;
 
 use clap::Parser;
 use conf::CONFIG;
-use lazy_static;
 use log::{debug, error, info};
 use std::path::PathBuf;
 use std::process::exit;
@@ -57,7 +56,7 @@ fn main() {
     let global_start = Instant::now();
     while !simluator.is_end() {
         simluator.tick().unwrap();
-        if (simluator.step_current % CONFIG.log_interval) == 0 {
+        if simluator.step_current.is_multiple_of(CONFIG.log_interval) {
             let end = global_start.elapsed();
             let simluation_elapsed = simluator.step_current * simluator.step;
             let vehicles = simluator.vehicle_list().unwrap();
@@ -76,5 +75,5 @@ fn main() {
 
     info!("Simluate ended");
 
-    let _ = simluator.close().unwrap();
+    simluator.close().unwrap();
 }

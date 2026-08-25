@@ -19,7 +19,6 @@ fn main() {
                 .file("bridge/libsumo-bridge.cpp")
                 .compile("libsumo-bridge");
             println!("cargo:rustc-link-search=native={}", lib_dir.display());
-            println!("cargo:rustc-link-search=native={}", lib_dir.display());
         }
         None => {
             cc::Build::new()

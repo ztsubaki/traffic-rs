@@ -90,7 +90,7 @@ fn get_conf() -> Config {
                     exit(1);
                 }
             };
-            match file.write(toml::to_string(&Config::default()).unwrap().as_bytes()) {
+            match file.write_all(toml::to_string(&Config::default()).unwrap().as_bytes()) {
                 Ok(_) => {
                     exit(0);
                 }
