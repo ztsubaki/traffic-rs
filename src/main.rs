@@ -5,6 +5,7 @@ mod sumo;
 use clap::Parser;
 use conf::CONFIG;
 use log::{debug, error, info};
+use std::env;
 use std::path::PathBuf;
 use std::process::exit;
 use std::time::Instant;
@@ -27,22 +28,69 @@ lazy_static::lazy_static! {
 }
 
 fn main() {
+    if env::var("RUST_LOG").is_err() {
+        unsafe { env::set_var("RUST_LOG", "info") }
+    }
     env_logger::init();
     debug!(
         "Starting with config:\n{}",
         toml::to_string(&*CONFIG).unwrap()
     );
-    let sumocfg = &CONFIG.sumo.sumocfg;
 
     info!("Loading SUMO");
 
-    let sumo = match Sumo::load(sumocfg) {
+    let pwd = match env::current_dir() {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Can not get pwd: {}", e);
+            exit(1);
+        }
+    };
+
+    let sumocfg = pwd
+        .join(match ARGS.config.as_ref().unwrap().parent() {
+            Some(p) => p,
+            None => {
+                error!(
+                    "Can not get parent for {}",
+                    ARGS.config.clone().unwrap().display()
+                );
+                exit(1);
+            }
+        })
+        .join(&CONFIG.sumo.sumocfg);
+
+    match sumocfg.parent() {
+        Some(path) => {
+            if path.is_dir() {
+                if let Err(e) = env::set_current_dir(path) {
+                    error!("Can not change dir to {}: {}", path.display(), e);
+                    exit(1);
+                }
+            } else {
+                error!("Sumocfg dir {} is not directory", path.display());
+                exit(1);
+            }
+        }
+        None => {
+            error!("Can not get parent for {}", sumocfg.display());
+            exit(1);
+        }
+    }
+
+    let sumo = match Sumo::load(&sumocfg) {
         Ok(sumo) => sumo,
         Err(e) => {
             error!("Init SUMO failed: {}", e);
             exit(1);
         }
     };
+
+    if let Err(e) = env::set_current_dir(pwd.clone()) {
+        error!("Can not change dir back to {}: {}", pwd.display(), e);
+        exit(1);
+    }
+
     info!("time_begin: {}ms", sumo.time_begin().unwrap());
     info!("time_end: {}ms", sumo.time_end().unwrap());
     info!("step_length: {}ms", sumo.step_length().unwrap());
