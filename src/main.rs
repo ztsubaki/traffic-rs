@@ -37,6 +37,8 @@ fn main() {
         toml::to_string(&*CONFIG).unwrap()
     );
 
+    lazy_static::initialize(&CONFIG);
+
     info!("Loading SUMO");
 
     let pwd = match env::current_dir() {
