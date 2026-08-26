@@ -17,6 +17,12 @@ lazy_static! {
 pub struct Config {
     pub log_interval: usize,
     pub rsu_report_interval: usize,
+    pub rsu_bandwidth: usize,
+    pub rsu_delay_min: usize,
+    pub rsu_delay_k: f64,
+    pub cloud_delay_mean: usize,
+    pub cloud_delay_std_dev: usize,
+    pub cloud_package_loss_rate: f64,
     pub sumo: Sumo,
 }
 
@@ -25,6 +31,12 @@ impl Config {
         Config {
             log_interval: 100,
             rsu_report_interval: 5000,
+            rsu_bandwidth: 50,
+            rsu_delay_min: 5,
+            rsu_delay_k: 100.0,
+            cloud_delay_mean: 20,
+            cloud_delay_std_dev: 10,
+            cloud_package_loss_rate: 0.001,
             sumo: Sumo {
                 sumocfg: PathBuf::new(),
                 threads: 2,

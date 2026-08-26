@@ -62,7 +62,7 @@ impl RSU {
                 channel,
                 map,
                 Communicator::RSU(TrafficLightID(tls_id)),
-                Communicator::Edge(TrafficLightID(tls_id)),
+                Communicator::Node(TrafficLightID(tls_id)),
                 time,
             );
         }

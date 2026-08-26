@@ -5,6 +5,7 @@ mod sumo;
 use clap::Parser;
 use conf::CONFIG;
 use log::{debug, error, info};
+use rand_distr::Normal;
 use std::env;
 use std::path::PathBuf;
 use std::process::exit;
@@ -100,7 +101,12 @@ fn main() {
     info!("route-files: {}", sumo.route_files().unwrap());
 
     info!("Inited SUMO");
-    let mut simluator = Simluator::init(sumo);
+    let cloud_delay_generator = Normal::new(
+        CONFIG.cloud_delay_mean as f32,
+        CONFIG.cloud_delay_std_dev as f32,
+    )
+    .unwrap();
+    let mut simluator = Simluator::init(sumo, cloud_delay_generator);
     info!("Inited Simluator");
 
     let global_start = Instant::now();
@@ -118,7 +124,12 @@ fn main() {
                     / ((simluator.time_end - simluator.time_begin) as f64),
                 (simluation_elapsed as f64) / (end.as_millis() as f64)
             );
-            info!("V2X queue message count: {}", simluator.message_count());
+            let (delay, loss) = simluator.v2x_stats();
+            info!(
+                "V2X average delay: {:.2} ms, package loss rate {:.2}%",
+                delay,
+                loss * 100.0
+            );
         }
     }
 

@@ -1,12 +1,19 @@
+mod cloud;
 mod net;
+mod node;
 mod rsu;
 mod v2x;
 
 use std::{ffi::CStr, str::FromStr};
 
-use crate::{Sumo, conf::CONFIG, simluator::v2x::Communicator};
+use crate::{
+    Sumo,
+    conf::CONFIG,
+    simluator::{cloud::Cloud, node::Node, v2x::Communicator},
+};
 use log::{error, trace};
 use net::Net;
+use rand_distr::Normal;
 use rsu::RSU;
 use v2x::Channel;
 
@@ -20,10 +27,12 @@ pub struct Simluator {
     pub step: usize,
     pub step_current: usize,
     rsu_report: usize,
+    nodes: Vec<Node>,
+    cloud: Cloud,
 }
 
 impl Simluator {
-    pub fn init(sumo: Sumo) -> Simluator {
+    pub fn init(sumo: Sumo, cloud_delay_generator: Normal<f32>) -> Simluator {
         let time_begin = sumo.time_begin().unwrap();
         let time_end = sumo.time_end().unwrap();
         let step = sumo.step_length().unwrap();
@@ -66,16 +75,22 @@ impl Simluator {
             error!("Check road net failed: {}", e);
             std::process::exit(1);
         });
+        let mut nodes = Vec::<Node>::new();
+        while nodes.len() < net.trafficlight_count() {
+            nodes.push(Node::new());
+        }
         Simluator {
             sumo,
             net,
             rsu: RSU::new(),
-            v2x: Channel::new(),
+            v2x: Channel::new(cloud_delay_generator),
             time_begin,
             time_end,
             step,
             step_current: 0,
             rsu_report: 0,
+            nodes,
+            cloud: Cloud::new(),
         }
     }
 
@@ -99,16 +114,26 @@ impl Simluator {
             self.rsu.report(&mut self.v2x, time);
         }
         trace!("Message quene count {}", self.message_count());
+        for node in self.nodes.iter_mut() {
+            node.on_tick();
+        }
+        self.cloud.on_tick();
         while self.v2x.latset_time().is_some() && self.v2x.latset_time().unwrap() < time + self.step
         {
             let msg = self.v2x.pop().unwrap();
             match msg.to {
-                Communicator::Cloud => {}
-                Communicator::Edge(_) => {}
+                Communicator::Cloud => {
+                    self.cloud.on_message(msg);
+                }
+                Communicator::Node(tls_id) => {
+                    self.nodes[tls_id.0].on_message(msg);
+                }
                 Communicator::RSU(_) => {
                     self.rsu.on_message(msg);
                 }
-                Communicator::Vehicle(_) => {}
+                Communicator::Vehicle(_) => {
+                    unreachable!("Can not sed message to vehicle in current version");
+                }
             }
         }
         self.sumo.step()?;
@@ -137,5 +162,9 @@ impl Simluator {
 
     pub fn message_count(&self) -> usize {
         self.v2x.message_count()
+    }
+
+    pub fn v2x_stats(&self) -> (f64, f64) {
+        (self.v2x.get_average_delay(), self.v2x.get_package_loss())
     }
 }
