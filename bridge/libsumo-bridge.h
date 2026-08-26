@@ -16,8 +16,14 @@ struct Payload {
 };
 struct Vehicle {
     char* id;
-    char* edge_id;
-    size_t lane_index;
+    char* lane_id;
+    double lane_position;
+    double speed;
+    double acceleration;
+    double waiting_time;
+    double time_loss;
+    char* next_trafficlight;
+    size_t next_link_index;
 };
 struct Edge {
     char* id;

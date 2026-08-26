@@ -1,15 +1,20 @@
 mod net;
+mod rsu;
 mod v2x;
 
 use std::{ffi::CStr, str::FromStr};
 
 use crate::Sumo;
-use log::error;
+use log::{error, trace};
 use net::Net;
+use rsu::RSU;
+use v2x::Channel;
 
 pub struct Simluator {
     sumo: Sumo,
     net: Net,
+    rsu: RSU,
+    v2x: Channel,
     pub time_begin: usize,
     pub time_end: usize,
     pub step: usize,
@@ -63,6 +68,8 @@ impl Simluator {
         Simluator {
             sumo,
             net,
+            rsu: RSU::new(),
+            v2x: Channel::new(),
             time_begin,
             time_end,
             step,
@@ -78,6 +85,22 @@ impl Simluator {
         if self.is_end() {
             return Err(String::from_str("Simluation ended").unwrap());
         }
+        let vehicles = self.sumo.get_vehicles()?;
+        trace!("Collect {} vehicles", vehicles.as_slice().len());
+        for veh in vehicles.as_slice() {
+            let vehicle = self.net.update_vehicle(veh)?;
+            self.net.send_v2x(
+                &vehicle,
+                &mut self.v2x,
+                self.time_begin + self.step * self.step_current,
+            );
+        }
+        while self.v2x.latset_time().is_some()
+            && self.v2x.latset_time().unwrap()
+                < self.time_begin + self.step * self.step_current + self.step
+        {
+            self.v2x.pop();
+        }
         self.sumo.step()?;
         self.step_current += 1;
         Ok(())
@@ -87,6 +110,7 @@ impl Simluator {
         self.sumo.close()
     }
 
+    #[allow(unused)]
     pub fn vehicle_list(&self) -> Result<Vec<String>, String> {
         let vec = self.sumo.get_vehicles()?;
         let mut strings: Vec<String> = Vec::new();
@@ -99,5 +123,9 @@ impl Simluator {
             );
         }
         Ok(strings)
+    }
+
+    pub fn message_count(&self) -> usize {
+        self.v2x.message_count()
     }
 }

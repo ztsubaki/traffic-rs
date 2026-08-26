@@ -5,17 +5,22 @@ use std::{
     fmt::Debug,
 };
 
-use crate::sumo;
+use crate::{
+    simluator::v2x::{Channel, Communicator, Message},
+    sumo,
+};
 
 pub struct Net {
     edge_ids: HashMap<CString, EdgeID>,
     junction_ids: HashMap<CString, JunctionID>,
     lane_ids: HashMap<CString, LaneID>,
     trafficlight_ids: HashMap<CString, TrafficLightID>,
+    vehicle_ids: HashMap<CString, VehicleID>,
     edges: Vec<Edge>,
     junctions: Vec<Junction>,
     lanes: Vec<Lane>,
     trafficlights: Vec<TrafficLight>,
+    vehicles: Vec<Vehicle>,
     num_links: usize,
     num_controlled_links: usize,
     num_phases: usize,
@@ -28,10 +33,12 @@ impl Net {
             junction_ids: HashMap::new(),
             lane_ids: HashMap::new(),
             trafficlight_ids: HashMap::new(),
+            vehicle_ids: HashMap::new(),
             edges: Vec::new(),
             junctions: Vec::new(),
             lanes: Vec::new(),
             trafficlights: Vec::new(),
+            vehicles: Vec::new(),
             num_links: 0,
             num_controlled_links: 0,
             num_phases: 0,
@@ -284,6 +291,78 @@ impl Net {
         }
         Ok(())
     }
+    pub fn update_vehicle(&mut self, vehicle: &sumo::Vehicle) -> Result<VehicleID, String> {
+        let lane_id_cstr = unsafe { CStr::from_ptr(vehicle.lane_id) };
+        let lane_id = match self.get_lane_id(lane_id_cstr) {
+            Some(id) => id,
+            None => {
+                return Err(format!(
+                    "Can not found lane {:?} for vehicle {:?}",
+                    lane_id_cstr, vehicle.id
+                ));
+            }
+        };
+        let next_tls_id_cstr = unsafe { CStr::from_ptr(vehicle.next_trafficlight) };
+        let next_tls_id = if next_tls_id_cstr.is_empty() {
+            None
+        } else {
+            match self.get_trafficlight_id(next_tls_id_cstr) {
+                Some(id) => Some(id),
+                None => {
+                    return Err(format!(
+                        "Can not found trafficlight {:?} for vehicle {:?}",
+                        next_tls_id_cstr, vehicle.id
+                    ));
+                }
+            }
+        };
+        let vehicle_id_cstr = unsafe { CStr::from_ptr(vehicle.id) };
+        if vehicle_id_cstr.is_empty() {
+            return Err("Empty vehicle id".to_string());
+        }
+        Ok(match self.vehicle_ids.get(vehicle_id_cstr) {
+            Some(id) => {
+                self.vehicles[id.0].lane = lane_id;
+                self.vehicles[id.0].next_trafficlight = next_tls_id;
+                self.vehicles[id.0].lane_position = vehicle.lane_position;
+                self.vehicles[id.0].speed = vehicle.speed;
+                self.vehicles[id.0].acceleration = vehicle.acceleration;
+                self.vehicles[id.0].waiting_time = vehicle.waiting_time;
+                self.vehicles[id.0].time_loss = vehicle.time_loss;
+                self.vehicles[id.0].next_link_index = vehicle.next_link_index;
+                *id
+            }
+            None => {
+                self.vehicle_ids
+                    .insert(vehicle_id_cstr.to_owned(), VehicleID(self.vehicles.len()));
+                self.vehicles.push(Vehicle {
+                    lane: lane_id,
+                    next_trafficlight: next_tls_id,
+                    lane_position: vehicle.lane_position,
+                    speed: vehicle.speed,
+                    acceleration: vehicle.acceleration,
+                    waiting_time: vehicle.waiting_time,
+                    time_loss: vehicle.time_loss,
+                    next_link_index: vehicle.next_link_index,
+                });
+                VehicleID(self.vehicle_ids.len() - 1)
+            }
+        })
+    }
+    pub fn send_v2x(&self, vehicle_id: &VehicleID, v2x: &mut Channel, time: usize) {
+        let vehicle = &self.vehicles[vehicle_id.0];
+        let lane = &self.lanes[vehicle.lane.0];
+
+        for tls_id in &lane.trafficlight {
+            Message::new(
+                v2x,
+                Box::new(vehicle.clone()),
+                Communicator::Vehicle(*vehicle_id),
+                Communicator::Edge(*tls_id),
+                time,
+            );
+        }
+    }
     pub fn edge_count(&self) -> usize {
         self.edge_ids.len()
     }
@@ -301,6 +380,12 @@ impl Net {
     }
     pub fn phase_count(&self) -> usize {
         self.num_phases
+    }
+    pub fn get_lane_id(&self, lane: &CStr) -> Option<LaneID> {
+        self.lane_ids.get(lane).map(|v| *v)
+    }
+    pub fn get_trafficlight_id(&self, trafficlight: &CStr) -> Option<TrafficLightID> {
+        self.trafficlight_ids.get(trafficlight).map(|v| *v)
     }
 }
 
@@ -433,4 +518,19 @@ impl Signal {
         }
         str
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct VehicleID(usize);
+
+#[derive(Clone)]
+struct Vehicle {
+    lane: LaneID,
+    lane_position: f64,
+    speed: f64,
+    acceleration: f64,
+    waiting_time: f64,
+    time_loss: f64,
+    next_trafficlight: Option<TrafficLightID>,
+    next_link_index: usize,
 }

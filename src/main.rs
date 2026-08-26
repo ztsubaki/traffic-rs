@@ -107,8 +107,6 @@ fn main() {
         if simluator.step_current.is_multiple_of(CONFIG.log_interval) {
             let end = global_start.elapsed();
             let simluation_elapsed = simluator.step_current * simluator.step;
-            let vehicles = simluator.vehicle_list().unwrap();
-            info!("loaded {} vechines", vehicles.len());
             info!(
                 "setp: {} simulation time: {}ms cost: {}ms procress: {:.2}% rate:{:.2}x",
                 simluator.step_current,
@@ -118,6 +116,7 @@ fn main() {
                     / ((simluator.time_end - simluator.time_begin) as f64),
                 (simluation_elapsed as f64) / (end.as_millis() as f64)
             );
+            info!("V2X queue message count: {}", simluator.message_count());
         }
     }
 

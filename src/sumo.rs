@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString, c_char, c_void};
+use std::ffi::{CStr, CString, c_char, c_double, c_void};
 use std::fs;
 use std::marker::PhantomData;
 use std::path::PathBuf;
@@ -18,17 +18,22 @@ struct Payload {
 #[repr(C)]
 pub struct Vehicle {
     pub id: *const c_char,
-    pub edge_id: *const c_char,
-    pub lane_index: usize,
+    pub lane_id: *const c_char,
+    pub lane_position: c_double,
+    pub speed: c_double,
+    pub acceleration: c_double,
+    pub waiting_time: c_double,
+    pub time_loss: c_double,
+    pub next_trafficlight: *const c_char,
+    pub next_link_index: usize,
 }
 
 impl Drop for Vehicle {
     fn drop(&mut self) {
         unsafe {
             libc::free(self.id as *mut c_void);
-            if !self.edge_id.is_null() {
-                libc::free(self.edge_id as *mut c_void);
-            }
+            libc::free(self.lane_id as *mut c_void);
+            libc::free(self.next_trafficlight as *mut c_void);
         }
     }
 }

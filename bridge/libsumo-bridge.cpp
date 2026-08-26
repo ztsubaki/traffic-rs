@@ -107,13 +107,39 @@ Payload get_vehicles() {
         size = vehicles_vec.size();
         for (size_t i = 0; i < size; i++) {
             vehicles[i].id = strdup(vehicles_vec[i].c_str());
-            if (vehicles[i].id == NULL) {
-                for (size_t j = 0; j < i; j++) free(vehicles[j].id);
+            vehicles[i].lane_id =
+                strdup(libsumo::Vehicle::getLaneID(vehicles_vec[i]).c_str());
+            auto next_tls = libsumo::Vehicle::getNextTLS(vehicles_vec[i]);
+            if (next_tls.size() > 0) {
+                vehicles[i].next_trafficlight = strdup(next_tls[0].id.c_str());
+                vehicles[i].next_link_index = next_tls[0].tlIndex;
+            } else {
+                vehicles[i].next_trafficlight = strdup("");
+                vehicles[i].next_link_index = 0;
+            }
+            if (vehicles[i].id == NULL || vehicles[i].lane_id == NULL ||
+                vehicles[i].next_trafficlight == NULL) {
+                if (vehicles[i].id) free(vehicles[i].id);
+                if (vehicles[i].lane_id) free(vehicles[i].lane_id);
+                if (vehicles[i].next_trafficlight)
+                    free(vehicles[i].next_trafficlight);
+                for (size_t j = 0; j < i; j++) {
+                    free(vehicles[j].id);
+                    free(vehicles[j].lane_id);
+                    free(vehicles[j].next_trafficlight);
+                }
                 free(vehicles);
                 return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
             }
-            vehicles[i].edge_id = NULL;
-            vehicles[i].lane_index = 0;
+            vehicles[i].lane_position =
+                libsumo::Vehicle::getLanePosition(vehicles_vec[i]);
+            vehicles[i].speed = libsumo::Vehicle::getSpeed(vehicles_vec[i]);
+            vehicles[i].acceleration =
+                libsumo::Vehicle::getAcceleration(vehicles_vec[i]);
+            vehicles[i].waiting_time =
+                libsumo::Vehicle::getWaitingTime(vehicles_vec[i]);
+            vehicles[i].time_loss =
+                libsumo::Vehicle::getTimeLoss(vehicles_vec[i]);
         }
     } catch (const std::exception& e) {
         return report_exception(e);
