@@ -4,7 +4,7 @@ mod v2x;
 
 use std::{ffi::CStr, str::FromStr};
 
-use crate::Sumo;
+use crate::{Sumo, conf::CONFIG, simluator::v2x::Communicator};
 use log::{error, trace};
 use net::Net;
 use rsu::RSU;
@@ -19,6 +19,7 @@ pub struct Simluator {
     pub time_end: usize,
     pub step: usize,
     pub step_current: usize,
+    rsu_report: usize,
 }
 
 impl Simluator {
@@ -74,6 +75,7 @@ impl Simluator {
             time_end,
             step,
             step_current: 0,
+            rsu_report: 0,
         }
     }
 
@@ -85,21 +87,29 @@ impl Simluator {
         if self.is_end() {
             return Err(String::from_str("Simluation ended").unwrap());
         }
+        let time = self.time_begin + self.step_current * self.step;
         let vehicles = self.sumo.get_vehicles()?;
         trace!("Collect {} vehicles", vehicles.as_slice().len());
         for veh in vehicles.as_slice() {
             let vehicle = self.net.update_vehicle(veh)?;
-            self.net.send_v2x(
-                &vehicle,
-                &mut self.v2x,
-                self.time_begin + self.step * self.step_current,
-            );
+            self.net.send_v2x(&vehicle, &mut self.v2x, time);
         }
-        while self.v2x.latset_time().is_some()
-            && self.v2x.latset_time().unwrap()
-                < self.time_begin + self.step * self.step_current + self.step
+        if time - self.rsu_report >= CONFIG.rsu_report_interval {
+            self.rsu_report = time;
+            self.rsu.report(&mut self.v2x, time);
+        }
+        trace!("Message quene count {}", self.message_count());
+        while self.v2x.latset_time().is_some() && self.v2x.latset_time().unwrap() < time + self.step
         {
-            self.v2x.pop();
+            let msg = self.v2x.pop().unwrap();
+            match msg.to {
+                Communicator::Cloud => {}
+                Communicator::Edge(_) => {}
+                Communicator::RSU(_) => {
+                    self.rsu.on_message(msg);
+                }
+                Communicator::Vehicle(_) => {}
+            }
         }
         self.sumo.step()?;
         self.step_current += 1;

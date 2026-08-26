@@ -358,7 +358,7 @@ impl Net {
                 v2x,
                 Box::new(vehicle.clone()),
                 Communicator::Vehicle(*vehicle_id),
-                Communicator::Edge(*tls_id),
+                Communicator::RSU(*tls_id),
                 time,
             );
         }
@@ -382,10 +382,10 @@ impl Net {
         self.num_phases
     }
     pub fn get_lane_id(&self, lane: &CStr) -> Option<LaneID> {
-        self.lane_ids.get(lane).map(|v| *v)
+        self.lane_ids.get(lane).copied()
     }
     pub fn get_trafficlight_id(&self, trafficlight: &CStr) -> Option<TrafficLightID> {
-        self.trafficlight_ids.get(trafficlight).map(|v| *v)
+        self.trafficlight_ids.get(trafficlight).copied()
     }
 }
 
@@ -399,7 +399,7 @@ pub struct JunctionID(usize);
 pub struct LaneID(usize);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct TrafficLightID(usize);
+pub struct TrafficLightID(pub usize);
 
 pub struct Edge {
     id: String,
@@ -521,16 +521,16 @@ impl Signal {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct VehicleID(usize);
+pub struct VehicleID(pub usize);
 
 #[derive(Clone)]
-struct Vehicle {
-    lane: LaneID,
-    lane_position: f64,
-    speed: f64,
-    acceleration: f64,
-    waiting_time: f64,
-    time_loss: f64,
-    next_trafficlight: Option<TrafficLightID>,
-    next_link_index: usize,
+pub struct Vehicle {
+    pub lane: LaneID,
+    pub lane_position: f64,
+    pub speed: f64,
+    pub acceleration: f64,
+    pub waiting_time: f64,
+    pub time_loss: f64,
+    pub next_trafficlight: Option<TrafficLightID>,
+    pub next_link_index: usize,
 }

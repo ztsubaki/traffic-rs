@@ -152,6 +152,7 @@ impl<T> CVec<T> {
         }
         unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
     }
+    #[allow(unused)]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         if self.len == 0 {
             return &mut [];

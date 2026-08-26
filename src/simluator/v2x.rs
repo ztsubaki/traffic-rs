@@ -17,10 +17,7 @@ impl Channel {
         self.queue.len()
     }
     pub fn latset_time(&self) -> Option<usize> {
-        match self.queue.peek() {
-            Some(mesg) => Some(mesg.0.time_arrive),
-            None => None,
-        }
+        self.queue.peek().map(|mesg| mesg.0.time_arrive)
     }
     pub fn pop(&mut self) -> Option<Message> {
         self.queue.pop().map(|m| m.0)
@@ -28,14 +25,15 @@ impl Channel {
 }
 
 pub struct Message {
-    from: Communicator,
-    to: Communicator,
-    content: Box<dyn Any>,
-    time_send: usize,
-    time_arrive: usize,
+    pub from: Communicator,
+    pub to: Communicator,
+    pub content: Box<dyn Any>,
+    pub time_send: usize,
+    pub time_arrive: usize,
 }
 
 impl Message {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(
         channel: &mut Channel,
         content: Box<dyn Any>,
@@ -73,9 +71,10 @@ impl Ord for Message {
     }
 }
 
+#[allow(clippy::upper_case_acronyms)]
 pub enum Communicator {
     Cloud,
     Edge(TrafficLightID),
-    RSU,
+    RSU(TrafficLightID),
     Vehicle(VehicleID),
 }

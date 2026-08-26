@@ -16,6 +16,7 @@ lazy_static! {
 #[derive(Deserialize, Serialize)]
 pub struct Config {
     pub log_interval: usize,
+    pub rsu_report_interval: usize,
     pub sumo: Sumo,
 }
 
@@ -23,6 +24,7 @@ impl Config {
     fn default() -> Config {
         Config {
             log_interval: 100,
+            rsu_report_interval: 5000,
             sumo: Sumo {
                 sumocfg: PathBuf::new(),
                 threads: 2,
