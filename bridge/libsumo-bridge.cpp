@@ -144,7 +144,12 @@ Payload get_edges() {
             edges[i].from = strdup(from.c_str());
             edges[i].to = strdup(to.c_str());
             edges[i].lane_number = lane_number;
-            if (edges[i].id == NULL || edges[i].name == NULL) {
+            if (edges[i].id == NULL || edges[i].name == NULL ||
+                edges[i].from == NULL || edges[i].to == NULL) {
+                if (edges[i].id) free(edges[i].id);
+                if (edges[i].name) free(edges[i].name);
+                if (edges[i].from) free(edges[i].from);
+                if (edges[i].to) free(edges[i].to);
                 for (size_t j = 0; j < i; j++) {
                     free(edges[j].id);
                     free(edges[j].name);
@@ -310,4 +315,67 @@ Payload get_links() {
         }
     }
     return Payload{BRIDGE_SUCCESS, (void*)links, size};
+}
+
+Payload get_phases() {
+    Phase* phases = NULL;
+    size_t size = 0;
+    std::vector<std::string> phase_trafficlights;
+    std::vector<std::string> phase_states;
+    std::vector<size_t> phase_program_indexs;
+    std::vector<size_t> phase_indexs;
+    std::vector<std::vector<size_t> > phase_next_indexs;
+    try {
+        auto trafficlights = libsumo::TrafficLight::getIDList();
+        for (auto trafficlight : trafficlights) {
+            auto logics =
+                libsumo::TrafficLight::getAllProgramLogics(trafficlight);
+            for (size_t logic_index = 0; logic_index < logics.size();
+                 logic_index++) {
+                for (size_t phase_index = 0;
+                     phase_index < logics[logic_index].phases.size();
+                     phase_index++) {
+                    phase_trafficlights.emplace_back(trafficlight);
+                    phase_states.emplace_back(
+                        logics[logic_index].phases[phase_index]->state);
+                    phase_program_indexs.emplace_back(logic_index);
+                    phase_indexs.emplace_back(phase_index);
+                    std::vector<size_t> nexts;
+                    for (auto next :
+                         logics[logic_index].phases[phase_index]->next)
+                        nexts.emplace_back(next);
+                    phase_next_indexs.emplace_back(nexts);
+                    size++;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        return report_exception(e);
+    }
+    phases = (Phase*)malloc(sizeof(Phase) * size);
+    if (phases == NULL) return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
+    for (size_t i = 0; i < size; i++) {
+        phases[i].trafficlight = strdup(phase_trafficlights[i].c_str());
+        phases[i].state = strdup(phase_states[i].c_str());
+        phases[i].program_index = phase_program_indexs[i];
+        phases[i].phase_index = phase_indexs[i];
+        phases[i].next_count = phase_next_indexs[i].size();
+        phases[i].next_indexs =
+            (size_t*)malloc(sizeof(size_t) * phases[i].next_count);
+        if (phases[i].trafficlight == NULL || phases[i].state == NULL ||
+            phases[i].next_indexs == NULL) {
+            if (phases[i].trafficlight) free(phases[i].trafficlight);
+            if (phases[i].state) free(phases[i].state);
+            if (phases[i].next_indexs) free(phases[i].next_indexs);
+            for (size_t j = 0; j < i; j++) {
+                free(phases[j].trafficlight);
+                free(phases[j].state);
+                free(phases[j].next_indexs);
+            }
+            return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
+        }
+        for (size_t j = 0; j < phases[i].next_count; j++)
+            phases[i].next_indexs[j] = phase_next_indexs[i][j];
+    }
+    return Payload{BRIDGE_SUCCESS, (void*)phases, size};
 }

@@ -44,6 +44,14 @@ struct Link {
     char* trafficlight;
     size_t link_index;
 };
+struct Phase {
+    char* trafficlight;
+    char* state;
+    size_t program_index;
+    size_t phase_index;
+    size_t* next_indexs;
+    size_t next_count;
+};
 struct Payload sumo_load(const char* cfg, const size_t threads);
 struct Payload sumo_step();
 struct Payload sumo_close();
@@ -55,6 +63,7 @@ struct Payload get_junctions();
 struct Payload get_lanes();
 struct Payload get_trafficlights();
 struct Payload get_links();
+struct Payload get_phases();
 #ifdef __cplusplus
 }
 #endif

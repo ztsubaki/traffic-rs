@@ -115,6 +115,26 @@ impl Drop for Link {
     }
 }
 
+#[repr(C)]
+pub struct Phase {
+    pub trafficlight: *const c_char,
+    pub state: *const c_char,
+    pub program_index: usize,
+    pub phase_index: usize,
+    pub next_indexs: *const usize,
+    pub next_count: usize,
+}
+
+impl Drop for Phase {
+    fn drop(&mut self) {
+        unsafe {
+            libc::free(self.trafficlight as *mut c_void);
+            libc::free(self.state as *mut c_void);
+            libc::free(self.next_indexs as *mut c_void);
+        }
+    }
+}
+
 pub struct CVec<T> {
     ptr: *mut T,
     len: usize,
@@ -161,6 +181,7 @@ unsafe extern "C" {
     fn get_lanes() -> Payload;
     fn get_trafficlights() -> Payload;
     fn get_links() -> Payload;
+    fn get_phases() -> Payload;
 }
 
 const BRIDGE_SUCCESS: usize = 0;
@@ -246,6 +267,9 @@ impl Sumo {
     }
     pub fn get_links(&self) -> Result<CVec<Link>, String> {
         resolve_c_result_with_vec_payload(unsafe { get_links() })
+    }
+    pub fn get_phases(&self) -> Result<CVec<Phase>, String> {
+        resolve_c_result_with_vec_payload(unsafe { get_phases() })
     }
     #[allow(unused)]
     fn get_parameter(&self, obj: &str, para: &str) -> Result<String, String> {

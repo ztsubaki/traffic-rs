@@ -4,6 +4,7 @@ mod v2x;
 use std::{ffi::CStr, str::FromStr};
 
 use crate::Sumo;
+use log::error;
 use net::Net;
 
 pub struct Simluator {
@@ -50,6 +51,15 @@ impl Simluator {
             net.link_count().0,
             net.link_count().1
         );
+        let phases = sumo.get_phases().unwrap();
+        for phase in phases.as_slice() {
+            net.new_phase(phase);
+        }
+        log::info!("Loaded {} phases", net.phase_count());
+        net.check().unwrap_or_else(|e| {
+            error!("Check road net failed: {}", e);
+            std::process::exit(1);
+        });
         Simluator {
             sumo,
             net,
