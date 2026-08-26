@@ -38,9 +38,10 @@ inline Payload report_exception(const std::exception& e) {
         return Payload{BRIDGE_SUMO_EXCEPTION, (void*)damangled, 0};
 }
 
-Payload sumo_load(const char* cfg) {
+Payload sumo_load(const char* cfg, const size_t threads) {
     try {
-        libsumo::Simulation::load({"-c", cfg, "--threads", "2"});
+        libsumo::Simulation::load(
+            {"-c", cfg, "--threads", std::to_string(threads)});
     } catch (const std::exception& e) {
         return report_exception(e);
     }

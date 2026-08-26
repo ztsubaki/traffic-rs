@@ -1,5 +1,7 @@
 #include <stddef.h>
 
+#include <cstddef>
+
 #define BRIDGE_SUCCESS 0
 #define BRIDGE_SUMO_EXCEPTION 1
 #define BRIDGE_MALLOC_FAILED 2
@@ -42,7 +44,7 @@ struct Link {
     char* trafficlight;
     size_t link_index;
 };
-struct Payload sumo_load(const char* cfg);
+struct Payload sumo_load(const char* cfg, const size_t threads);
 struct Payload sumo_step();
 struct Payload sumo_close();
 struct Payload get_parameter(char* obj, char* para);

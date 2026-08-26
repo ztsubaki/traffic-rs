@@ -25,6 +25,7 @@ impl Config {
             log_interval: 100,
             sumo: Sumo {
                 sumocfg: PathBuf::new(),
+                threads: 2,
             },
         }
     }
@@ -33,6 +34,7 @@ impl Config {
 #[derive(Deserialize, Serialize)]
 pub struct Sumo {
     pub sumocfg: PathBuf,
+    pub threads: usize,
 }
 
 fn get_conf() -> Config {

@@ -78,7 +78,7 @@ fn main() {
         }
     }
 
-    let sumo = match Sumo::load(&sumocfg) {
+    let sumo = match Sumo::load(&sumocfg, CONFIG.sumo.threads) {
         Ok(sumo) => sumo,
         Err(e) => {
             error!("Init SUMO failed: {}", e);

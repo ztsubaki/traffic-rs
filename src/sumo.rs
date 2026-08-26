@@ -150,7 +150,7 @@ impl<T> Drop for CVec<T> {
 }
 
 unsafe extern "C" {
-    fn sumo_load(cfg: *const c_char) -> Payload;
+    fn sumo_load(cfg: *const c_char, threads: usize) -> Payload;
     fn sumo_step() -> Payload;
     fn sumo_close() -> Payload;
     fn get_parameter(obj: *const c_char, para: *const c_char) -> Payload;
@@ -168,7 +168,10 @@ const BRIDGE_SUMO_EXCEPTION: usize = 1;
 const BRIDGE_MALLOC_FAILED: usize = 2;
 
 impl Sumo {
-    pub fn load(sumocfg: &PathBuf) -> Result<Sumo, String> {
+    pub fn load(sumocfg: &PathBuf, thread: usize) -> Result<Sumo, String> {
+        if thread < 1 {
+            return Err("Sumo threads must no less than 1".to_string());
+        }
         let cfg_metadata = match fs::metadata(sumocfg) {
             Ok(metadata) => metadata,
             Err(e) => return Err(e.to_string()),
@@ -181,6 +184,7 @@ impl Sumo {
                 CString::from_str(sumocfg.to_str().unwrap())
                     .unwrap()
                     .as_ptr(),
+                thread,
             )
         }) {
             Err(e) => Err(e),
