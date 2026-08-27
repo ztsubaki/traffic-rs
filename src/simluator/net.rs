@@ -205,10 +205,10 @@ impl Net {
                 .insert(trafficlight.unwrap());
             if let Some(v) = via {
                 self.lanes[v.0].trafficlight.insert(trafficlight.unwrap());
-            }
             self.lanes[via.unwrap().0]
                 .trafficlight
                 .insert(trafficlight.unwrap());
+            }
             self.num_controlled_links += 1;
         }
     }

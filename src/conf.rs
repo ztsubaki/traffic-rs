@@ -1,6 +1,7 @@
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::{
     fs,
     io::{self, Read, Write},
@@ -23,6 +24,7 @@ pub struct Config {
     pub cloud_delay_mean: usize,
     pub cloud_delay_std_dev: usize,
     pub cloud_package_loss_rate: f64,
+    pub output_dir: PathBuf,
     pub sumo: Sumo,
 }
 
@@ -37,6 +39,7 @@ impl Config {
             cloud_delay_mean: 20,
             cloud_delay_std_dev: 10,
             cloud_package_loss_rate: 0.001,
+            output_dir: PathBuf::from_str("./output/").unwrap(),
             sumo: Sumo {
                 sumocfg: PathBuf::new(),
                 threads: 2,

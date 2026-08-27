@@ -4,10 +4,10 @@ mod sumo;
 
 use clap::Parser;
 use conf::CONFIG;
-use log::{debug, error, info};
+use log::{debug, error, info,warn};
 use rand_distr::Normal;
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::time::Instant;
 use sumo::Sumo;
@@ -49,8 +49,7 @@ fn main() {
             exit(1);
         }
     };
-
-    let sumocfg = pwd
+    let cfg_dir = pwd
         .join(match ARGS.config.as_ref().unwrap().parent() {
             Some(p) => p,
             None => {
@@ -60,8 +59,29 @@ fn main() {
                 );
                 exit(1);
             }
-        })
-        .join(&CONFIG.sumo.sumocfg);
+        });
+
+    let output_dir = cfg_dir.join(&CONFIG.output_dir);
+    if output_dir.exists(){
+        if !output_dir.is_dir(){
+            error!("Output dir {} is not directory",output_dir.display());
+            exit(1);
+        }else{
+            warn!("Output dir already exists, pervious output may be covered");
+        }
+    }else{
+        match std::fs::create_dir(&output_dir) {
+            Ok(_) => {}
+            Err(e) => {
+                error!("Can not create output dir {}: {}",&output_dir.display(),e);
+                exit(1);
+            }
+        }
+    }
+
+    info!("Using output directory {}",output_dir.display());
+
+    let sumocfg = cfg_dir.join(&CONFIG.sumo.sumocfg);
 
     match sumocfg.parent() {
         Some(path) => {
@@ -81,7 +101,12 @@ fn main() {
         }
     }
 
-    let sumo = match Sumo::load(&sumocfg, CONFIG.sumo.threads) {
+    if !sumocfg.exists() || !sumocfg.is_file() {
+        error!("Can not open sumocfg file {}", sumocfg.display());
+        exit(1);
+    }
+
+    let sumo = match Sumo::load(&sumocfg, CONFIG.sumo.threads, &output_dir) {
         Ok(sumo) => sumo,
         Err(e) => {
             error!("Init SUMO failed: {}", e);
@@ -132,8 +157,5 @@ fn main() {
             );
         }
     }
-
     info!("Simluate ended");
-
-    simluator.close().unwrap();
 }

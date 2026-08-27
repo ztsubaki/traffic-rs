@@ -109,7 +109,7 @@ impl Simluator {
             let vehicle = self.net.update_vehicle(veh)?;
             self.net.send_v2x(&vehicle, &mut self.v2x, time);
         }
-        if time - self.rsu_report >= CONFIG.rsu_report_interval {
+        if self.step_current.is_multiple_of(CONFIG.rsu_report_interval) {
             self.rsu_report = time;
             self.rsu.report(&mut self.v2x, time);
         }
@@ -132,17 +132,13 @@ impl Simluator {
                     self.rsu.on_message(msg);
                 }
                 Communicator::Vehicle(_) => {
-                    unreachable!("Can not sed message to vehicle in current version");
+                    unreachable!("Can not send message to vehicle in current version");
                 }
             }
         }
         self.sumo.step()?;
         self.step_current += 1;
         Ok(())
-    }
-
-    pub fn close(self) -> Result<(), String> {
-        self.sumo.close()
     }
 
     #[allow(unused)]
@@ -168,3 +164,4 @@ impl Simluator {
         (self.v2x.get_average_delay(), self.v2x.get_package_loss())
     }
 }
+

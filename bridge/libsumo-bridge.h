@@ -58,7 +58,7 @@ struct Phase {
     size_t* next_indexs;
     size_t next_count;
 };
-struct Payload sumo_load(const char* cfg, const size_t threads);
+struct Payload sumo_load(const char* cfg, const size_t threads, const char* statics, const char* tripinfo, const char* edgedata);
 struct Payload sumo_step();
 struct Payload sumo_close();
 struct Payload get_parameter(char* obj, char* para);

@@ -61,7 +61,7 @@ impl Channel {
         }
     }
     pub fn get_package_count(&self, tls_id: TrafficLightID) -> usize {
-        if self.package_cout.len() < tls_id.0 {
+        if self.package_cout.len() <= tls_id.0 {
             0
         } else {
             self.package_cout[tls_id.0]
@@ -100,7 +100,7 @@ impl Message {
                 .cloud_delay_generator
                 .sample(&mut channel.rng)
                 .round()
-                .min(1.0) as usize;
+                .max(1.0) as usize;
             if !channel.rng.random_bool(CONFIG.cloud_package_loss_rate) {
                 channel.push(Message {
                     from,

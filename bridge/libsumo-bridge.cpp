@@ -38,10 +38,10 @@ inline Payload report_exception(const std::exception& e) {
         return Payload{BRIDGE_SUMO_EXCEPTION, (void*)damangled, 0};
 }
 
-Payload sumo_load(const char* cfg, const size_t threads) {
+Payload sumo_load(const char* cfg, const size_t threads, const char* statics, const char* tripinfo, const char* edgedata) {
     try {
         libsumo::Simulation::load(
-            {"-c", cfg, "--threads", std::to_string(threads)});
+            {"-c", cfg, "--threads", std::to_string(threads), "--statistic-output",statics,"--duration-log.statistics","true","--tripinfo-output",tripinfo,"--tripinfo-output.write-unfinished", "true","--edgedata-output",edgedata});
     } catch (const std::exception& e) {
         return report_exception(e);
     }

@@ -9,6 +9,14 @@ pub struct Sumo {
     _not_thread_safe: PhantomData<Rc<()>>,
 }
 
+impl Drop for Sumo {
+    fn drop(&mut self) {
+        if let Err(e) = self.close(){
+            log::warn!("Err {} reported when closing SUMO",e);
+        }
+    }
+}
+
 #[repr(C)]
 struct Payload {
     status: usize,
@@ -176,7 +184,7 @@ impl<T> Drop for CVec<T> {
 }
 
 unsafe extern "C" {
-    fn sumo_load(cfg: *const c_char, threads: usize) -> Payload;
+    fn sumo_load(cfg: *const c_char, threads: usize, statics:  *const c_char, tripinfo:  *const c_char, edgedata:  *const c_char) -> Payload;
     fn sumo_step() -> Payload;
     fn sumo_close() -> Payload;
     fn get_parameter(obj: *const c_char, para: *const c_char) -> Payload;
@@ -195,23 +203,28 @@ const BRIDGE_SUMO_EXCEPTION: usize = 1;
 const BRIDGE_MALLOC_FAILED: usize = 2;
 
 impl Sumo {
-    pub fn load(sumocfg: &PathBuf, thread: usize) -> Result<Sumo, String> {
+    pub fn load(sumocfg: &PathBuf, thread: usize, output: &PathBuf) -> Result<Sumo, String> {
         if thread < 1 {
             return Err("Sumo threads must no less than 1".to_string());
         }
-        let cfg_metadata = match fs::metadata(sumocfg) {
-            Ok(metadata) => metadata,
-            Err(e) => return Err(e.to_string()),
-        };
-        if !cfg_metadata.is_file() {
-            return Err("Sumocfg is not a regular file".to_string());
-        }
+        let statics = output.join("./statics.xml");
+        let tripinfo = output.join("./tripinfo.xml");
+        let edgedata = output.join("./edgedata.xml");
         match resolve_c_result_no_paylod(unsafe {
             sumo_load(
                 CString::from_str(sumocfg.to_str().unwrap())
                     .unwrap()
                     .as_ptr(),
                 thread,
+                CString::from_str(statics.to_str().unwrap())
+                    .unwrap()
+                    .as_ptr(),
+                CString::from_str(tripinfo.to_str().unwrap())
+                    .unwrap()
+                    .as_ptr(),
+                CString::from_str(edgedata.to_str().unwrap())
+                    .unwrap()
+                    .as_ptr(),
             )
         }) {
             Err(e) => Err(e),
@@ -241,7 +254,7 @@ impl Sumo {
             .parse::<f64>()
             .map_or(
                 Err("Parse error".to_string()),
-                |f| Ok((f * 1000.0) as usize),
+                |f| Ok(if f<0.0 {usize::MAX}else{(f * 1000.0) as usize}),
             )
     }
     pub fn net_file(&self) -> Result<String, String> {
@@ -253,7 +266,7 @@ impl Sumo {
     pub fn step(&self) -> Result<(), String> {
         resolve_c_result_no_paylod(unsafe { sumo_step() })
     }
-    pub fn close(self) -> Result<(), String> {
+    fn close(&mut self) -> Result<(), String> {
         resolve_c_result_no_paylod(unsafe { sumo_close() })
     }
     pub fn get_edges(&self) -> Result<CVec<Edge>, String> {
