@@ -53,6 +53,7 @@ jobs:
       run: |
         mkdir traffic-rs
         mv ./target/release/traffic-rs ./traffic-rs/
+        cp ./plugin.py ./traffic-rs/
         tar -czf ./traffic-rs-linux-x86_64.tar.gz ./traffic-rs
     - name: Update preview release
       env:
