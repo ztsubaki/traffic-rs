@@ -4,10 +4,14 @@ mod sumo;
 
 use clap::Parser;
 use conf::CONFIG;
-use log::{debug, error, info,warn};
+use log::{debug, error, info, warn};
+use pyo3::Python;
+use pyo3::types::PyModule;
 use rand_distr::Normal;
+use simluator::trafficrs;
 use std::env;
-use std::path::{Path, PathBuf};
+use std::ffi::CString;
+use std::path::PathBuf;
 use std::process::exit;
 use std::time::Instant;
 use sumo::Sumo;
@@ -49,37 +53,36 @@ fn main() {
             exit(1);
         }
     };
-    let cfg_dir = pwd
-        .join(match ARGS.config.as_ref().unwrap().parent() {
-            Some(p) => p,
-            None => {
-                error!(
-                    "Can not get parent for {}",
-                    ARGS.config.clone().unwrap().display()
-                );
-                exit(1);
-            }
-        });
+    let cfg_dir = pwd.join(match ARGS.config.as_ref().unwrap().parent() {
+        Some(p) => p,
+        None => {
+            error!(
+                "Can not get parent for {}",
+                ARGS.config.clone().unwrap().display()
+            );
+            exit(1);
+        }
+    });
 
     let output_dir = cfg_dir.join(&CONFIG.output_dir);
-    if output_dir.exists(){
-        if !output_dir.is_dir(){
-            error!("Output dir {} is not directory",output_dir.display());
+    if output_dir.exists() {
+        if !output_dir.is_dir() {
+            error!("Output dir {} is not directory", output_dir.display());
             exit(1);
-        }else{
+        } else {
             warn!("Output dir already exists, pervious output may be covered");
         }
-    }else{
+    } else {
         match std::fs::create_dir(&output_dir) {
             Ok(_) => {}
             Err(e) => {
-                error!("Can not create output dir {}: {}",&output_dir.display(),e);
+                error!("Can not create output dir {}: {}", output_dir.display(), e);
                 exit(1);
             }
         }
     }
 
-    info!("Using output directory {}",output_dir.display());
+    info!("Using output directory {}", output_dir.display());
 
     let sumocfg = cfg_dir.join(&CONFIG.sumo.sumocfg);
 
@@ -126,12 +129,81 @@ fn main() {
     info!("route-files: {}", sumo.route_files().unwrap());
 
     info!("Inited SUMO");
+
+    pyo3::append_to_inittab!(trafficrs);
+    Python::initialize();
+
+    match Python::attach(|py| {
+        py.run(
+            pyo3::ffi::c_str!(
+                r#"
+import trafficrs
+
+trafficrs.hello_world()
+"#
+            ),
+            None,
+            None,
+        )
+    }) {
+        Ok(_) => {}
+        Err(e) => {
+            error!("Test python bind failed: {}", e);
+            exit(1);
+        }
+    }
+
+    info!("Inited Python runtime");
+
+    let script = cfg_dir.join(&CONFIG.script);
+
+    if !script.exists() {
+        error!("Script file {} not exist", script.display());
+        exit(1);
+    }
+
+    if !script.is_file() {
+        error!("Script file {} is not regular file", script.display());
+        exit(1);
+    }
+
+    let source = match std::fs::read_to_string(&script) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            error!("Script file {} can not read: {}", script.display(), e);
+            exit(1);
+        }
+    };
+    let source = match CString::new(source) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            error!("Can not decode script file {}: {}", script.display(), e);
+            exit(1);
+        }
+    };
+
+    let module = Python::attach(|py| {
+        match PyModule::from_code(
+            py,
+            &source,
+            pyo3::ffi::c_str!("plugin.py"),
+            pyo3::ffi::c_str!("plugin"),
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                error!("Load script failed: {}", e);
+                exit(1);
+            }
+        }
+        .unbind()
+    });
+
     let cloud_delay_generator = Normal::new(
         CONFIG.cloud_delay_mean as f32,
         CONFIG.cloud_delay_std_dev as f32,
     )
     .unwrap();
-    let mut simluator = Simluator::init(sumo, cloud_delay_generator);
+    let mut simluator = Simluator::init(sumo, cloud_delay_generator, module);
     info!("Inited Simluator");
 
     let global_start = Instant::now();

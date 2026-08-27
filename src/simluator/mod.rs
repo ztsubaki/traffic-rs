@@ -9,10 +9,21 @@ use std::{ffi::CStr, str::FromStr};
 use crate::{
     Sumo,
     conf::CONFIG,
-    simluator::{cloud::Cloud, node::Node, v2x::Communicator},
+    simluator::{
+        cloud::{Cloud, CloudBase},
+        node::Node,
+        v2x::Communicator,
+    },
 };
 use log::{error, trace};
 use net::Net;
+use node::NodeBase;
+use pyo3::{Bound, PyResult, Python, pymodule};
+use pyo3::{
+    Py, pyfunction,
+    types::{PyModule, PyModuleMethods},
+    wrap_pyfunction,
+};
 use rand_distr::Normal;
 use rsu::RSU;
 use v2x::Channel;
@@ -32,7 +43,7 @@ pub struct Simluator {
 }
 
 impl Simluator {
-    pub fn init(sumo: Sumo, cloud_delay_generator: Normal<f32>) -> Simluator {
+    pub fn init(sumo: Sumo, cloud_delay_generator: Normal<f32>, module: Py<PyModule>) -> Simluator {
         let time_begin = sumo.time_begin().unwrap();
         let time_end = sumo.time_end().unwrap();
         let step = sumo.step_length().unwrap();
@@ -56,7 +67,8 @@ impl Simluator {
         for trafficlight in trafficlights.as_slice() {
             net.new_trafficlight(trafficlight);
         }
-        log::info!("Loaded {} trafficlights", net.trafficlight_count());
+        let tls_count = net.trafficlight_count();
+        log::info!("Loaded {} trafficlights", tls_count);
         let links = sumo.get_links().unwrap();
         for link in links.as_slice() {
             net.new_link(link);
@@ -76,9 +88,41 @@ impl Simluator {
             std::process::exit(1);
         });
         let mut nodes = Vec::<Node>::new();
-        while nodes.len() < net.trafficlight_count() {
-            nodes.push(Node::new());
-        }
+        Python::attach(|py| {
+            let node_class = match module.getattr(py, "Node") {
+                Ok(r) => r,
+                Err(e) => {
+                    error!("Class Node not found: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            for id in 0..tls_count {
+                nodes.push(match node_class.call1(py, (id,)) {
+                    Ok(r) => Node::new(r),
+                    Err(e) => {
+                        error!("Failed to init Node: {}", e);
+                        std::process::exit(1);
+                    }
+                })
+            }
+        });
+        let cloud = Python::attach(|py| {
+            match match module.getattr(py, "Cloud") {
+                Ok(r) => r,
+                Err(e) => {
+                    error!("Class Cloud not found: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            .call0(py)
+            {
+                Ok(r) => Cloud::new(r),
+                Err(e) => {
+                    error!("Failed to init Cloud: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        });
         Simluator {
             sumo,
             net,
@@ -90,7 +134,7 @@ impl Simluator {
             step_current: 0,
             rsu_report: 0,
             nodes,
-            cloud: Cloud::new(),
+            cloud,
         }
     }
 
@@ -115,9 +159,9 @@ impl Simluator {
         }
         trace!("Message quene count {}", self.message_count());
         for node in self.nodes.iter_mut() {
-            node.on_tick();
+            node.on_tick(time);
         }
-        self.cloud.on_tick();
+        self.cloud.on_tick(time);
         while self.v2x.latset_time().is_some() && self.v2x.latset_time().unwrap() < time + self.step
         {
             let msg = self.v2x.pop().unwrap();
@@ -165,3 +209,14 @@ impl Simluator {
     }
 }
 
+#[pyfunction]
+fn hello_world() {
+    log::info!("Hello World from Python");
+}
+#[pymodule]
+pub fn trafficrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<NodeBase>()?;
+    m.add_class::<CloudBase>()?;
+    let _ = m.add_function(wrap_pyfunction!(hello_world, m)?);
+    Ok(())
+}

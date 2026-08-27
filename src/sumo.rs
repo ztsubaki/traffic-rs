@@ -1,7 +1,6 @@
 use std::ffi::{CStr, CString, c_char, c_double, c_void};
-use std::fs;
 use std::marker::PhantomData;
-use std::path::PathBuf;
+use std::path::Path;
 use std::rc::Rc;
 use std::str::FromStr;
 
@@ -11,8 +10,8 @@ pub struct Sumo {
 
 impl Drop for Sumo {
     fn drop(&mut self) {
-        if let Err(e) = self.close(){
-            log::warn!("Err {} reported when closing SUMO",e);
+        if let Err(e) = self.close() {
+            log::warn!("Err {} reported when closing SUMO", e);
         }
     }
 }
@@ -184,7 +183,13 @@ impl<T> Drop for CVec<T> {
 }
 
 unsafe extern "C" {
-    fn sumo_load(cfg: *const c_char, threads: usize, statics:  *const c_char, tripinfo:  *const c_char, edgedata:  *const c_char) -> Payload;
+    fn sumo_load(
+        cfg: *const c_char,
+        threads: usize,
+        statics: *const c_char,
+        tripinfo: *const c_char,
+        edgedata: *const c_char,
+    ) -> Payload;
     fn sumo_step() -> Payload;
     fn sumo_close() -> Payload;
     fn get_parameter(obj: *const c_char, para: *const c_char) -> Payload;
@@ -203,7 +208,7 @@ const BRIDGE_SUMO_EXCEPTION: usize = 1;
 const BRIDGE_MALLOC_FAILED: usize = 2;
 
 impl Sumo {
-    pub fn load(sumocfg: &PathBuf, thread: usize, output: &PathBuf) -> Result<Sumo, String> {
+    pub fn load(sumocfg: &Path, thread: usize, output: &Path) -> Result<Sumo, String> {
         if thread < 1 {
             return Err("Sumo threads must no less than 1".to_string());
         }
@@ -252,10 +257,13 @@ impl Sumo {
     pub fn time_end(&self) -> Result<usize, String> {
         self.get_option("end")?
             .parse::<f64>()
-            .map_or(
-                Err("Parse error".to_string()),
-                |f| Ok(if f<0.0 {usize::MAX}else{(f * 1000.0) as usize}),
-            )
+            .map_or(Err("Parse error".to_string()), |f| {
+                Ok(if f < 0.0 {
+                    usize::MAX
+                } else {
+                    (f * 1000.0) as usize
+                })
+            })
     }
     pub fn net_file(&self) -> Result<String, String> {
         self.get_option("net-file")
