@@ -1,6 +1,9 @@
 use pyo3::{Py, PyAny, Python, pyclass, pymethods, types::PyAnyMethods};
 
-use crate::simluator::v2x::Message;
+use crate::simluator::{
+    net::{Net, Signal},
+    v2x::{Channel, Communicator, Message},
+};
 
 pub struct Cloud {
     obj: Py<PyAny>,
@@ -8,11 +11,9 @@ pub struct Cloud {
 
 impl Cloud {
     pub fn new(obj: Py<PyAny>) -> Self {
-        let mut cloud = Cloud { obj };
-        cloud.on_create();
-        cloud
+        Cloud { obj }
     }
-    pub fn on_tick(&mut self, time: usize) {
+    pub fn on_tick(&mut self, time: usize, v2x: &mut Channel, net: &Net) {
         Python::attach(|py| {
             self.obj
                 .bind(py)
@@ -20,21 +21,56 @@ impl Cloud {
                 .map(|_| {})
         })
         .unwrap();
+        self.post_hook(time, v2x);
     }
-    pub fn on_message(&mut self, msg: Message) {}
-    pub fn on_create(&mut self) {
+    pub fn on_message(&mut self, msg: Message, v2x: &mut Channel, net: &Net) {
+        let from = match msg.from {
+            Communicator::Node(tls_id) => Some(tls_id.0),
+            _ => {
+                return;
+            }
+        };
+        Python::attach(|py| {
+            self.obj
+                .bind(py)
+                .call_method1(
+                    "on_message",
+                    (msg.time_send, msg.time_arrive, from, msg.content),
+                )
+                .map(|_| {})
+        });
+        self.post_hook(msg.time_arrive, v2x);
+    }
+    pub fn on_create(&mut self, v2x: &mut Channel, net: &Net) {
         Python::attach(|py| self.obj.bind(py).call_method0("on_create").map(|_| {})).unwrap();
+        self.post_hook(0, v2x);
+    }
+    fn post_hook(&mut self, time: usize, v2x: &mut Channel) {
+        for message in Python::attach(|py| {
+            self.obj
+                .bind(py)
+                .cast::<CloudBase>()
+                .unwrap()
+                .borrow_mut()
+                .get_messages()
+        }) {
+            Message::new(v2x, message.content, message.from, message.to, time);
+        }
     }
 }
 
 #[pyclass(subclass)]
-pub struct CloudBase {}
+pub struct CloudBase {
+    messages: Vec<Message>,
+}
 
 #[pymethods]
 impl CloudBase {
     #[new]
     fn new() -> Self {
-        CloudBase {}
+        CloudBase {
+            messages: Vec::new(),
+        }
     }
 
     fn on_tick(&self, _time: usize) {
@@ -51,7 +87,23 @@ impl CloudBase {
         panic!("on_message for Node not override");
     }
 
+    fn send_to_node(&mut self, node_id: usize, content: Py<PyAny>) {
+        self.messages.push(Message {
+            from: Communicator::Cloud,
+            to: Communicator::Node(super::net::TrafficLightID(node_id)),
+            content,
+            time_send: 0,
+            time_arrive: 0,
+        });
+    }
+
     fn on_create(&self) {
         panic!("on_create for Node not override");
+    }
+}
+
+impl CloudBase {
+    pub fn get_messages(&mut self) -> Vec<Message> {
+        std::mem::take(&mut self.messages)
     }
 }

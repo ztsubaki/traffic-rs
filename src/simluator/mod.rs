@@ -15,7 +15,7 @@ use crate::{
         v2x::Communicator,
     },
 };
-use log::{error, trace};
+use log::{debug, error, trace};
 use net::Net;
 use node::NodeBase;
 use pyo3::{Bound, PyResult, Python, pymodule};
@@ -37,7 +37,6 @@ pub struct Simluator {
     pub time_end: usize,
     pub step: usize,
     pub step_current: usize,
-    rsu_report: usize,
     nodes: Vec<Node>,
     cloud: Cloud,
 }
@@ -87,6 +86,7 @@ impl Simluator {
             error!("Check road net failed: {}", e);
             std::process::exit(1);
         });
+        let mut v2x = v2x::Channel::new(cloud_delay_generator);
         let mut nodes = Vec::<Node>::new();
         Python::attach(|py| {
             let node_class = match module.getattr(py, "Node") {
@@ -103,10 +103,11 @@ impl Simluator {
                         error!("Failed to init Node: {}", e);
                         std::process::exit(1);
                     }
-                })
+                });
+                nodes.last_mut().unwrap().on_create(&mut v2x, &net);
             }
         });
-        let cloud = Python::attach(|py| {
+        let mut cloud = Python::attach(|py| {
             match match module.getattr(py, "Cloud") {
                 Ok(r) => r,
                 Err(e) => {
@@ -123,16 +124,16 @@ impl Simluator {
                 }
             }
         });
+        cloud.on_create(&mut v2x, &net);
         Simluator {
             sumo,
             net,
             rsu: RSU::new(),
-            v2x: Channel::new(cloud_delay_generator),
+            v2x,
             time_begin,
             time_end,
             step,
             step_current: 0,
-            rsu_report: 0,
             nodes,
             cloud,
         }
@@ -154,23 +155,22 @@ impl Simluator {
             self.net.send_v2x(&vehicle, &mut self.v2x, time);
         }
         if self.step_current.is_multiple_of(CONFIG.rsu_report_interval) {
-            self.rsu_report = time;
             self.rsu.report(&mut self.v2x, time);
         }
         trace!("Message quene count {}", self.message_count());
         for node in self.nodes.iter_mut() {
-            node.on_tick(time);
+            node.on_tick(time, &mut self.v2x, &self.net);
         }
-        self.cloud.on_tick(time);
+        self.cloud.on_tick(time, &mut self.v2x, &self.net);
         while self.v2x.latset_time().is_some() && self.v2x.latset_time().unwrap() < time + self.step
         {
             let msg = self.v2x.pop().unwrap();
             match msg.to {
                 Communicator::Cloud => {
-                    self.cloud.on_message(msg);
+                    self.cloud.on_message(msg, &mut self.v2x, &self.net);
                 }
                 Communicator::Node(tls_id) => {
-                    self.nodes[tls_id.0].on_message(msg);
+                    self.nodes[tls_id.0].on_message(msg, &mut self.v2x, &self.net);
                 }
                 Communicator::RSU(_) => {
                     self.rsu.on_message(msg);

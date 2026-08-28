@@ -1,3 +1,4 @@
+use pyo3::{Py, PyAny};
 use rand::{RngExt, rngs::ThreadRng};
 use rand_distr::{Distribution, Normal};
 
@@ -81,7 +82,7 @@ impl Channel {
 pub struct Message {
     pub from: Communicator,
     pub to: Communicator,
-    pub content: Box<dyn Any>,
+    pub content: Py<PyAny>,
     pub time_send: usize,
     pub time_arrive: usize,
 }
@@ -90,7 +91,7 @@ impl Message {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(
         channel: &mut Channel,
-        content: Box<dyn Any>,
+        content: Py<PyAny>,
         from: Communicator,
         to: Communicator,
         time_send: usize,

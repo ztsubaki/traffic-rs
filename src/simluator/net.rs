@@ -1,4 +1,5 @@
 use log::warn;
+use pyo3::{Bound, IntoPyObject, Py, Python, pyclass};
 use std::{
     collections::{HashMap, HashSet},
     ffi::{CStr, CString},
@@ -353,10 +354,13 @@ impl Net {
         let vehicle = &self.vehicles[vehicle_id.0];
         let lane = &self.lanes[vehicle.lane.0];
 
+        let ctx = Python::attach(|py| Py::new(py, vehicle.clone()).unwrap().into_any());
+
         for tls_id in &lane.trafficlight {
+            let ctx_ref = Python::attach(|py| ctx.clone_ref(py));
             Message::new(
                 v2x,
-                Box::new(vehicle.clone()),
+                ctx_ref,
                 Communicator::Vehicle(*vehicle_id),
                 Communicator::RSU(*tls_id),
                 time,
@@ -451,7 +455,7 @@ pub enum Signal {
 }
 
 impl Signal {
-    fn from_str(str: &str) -> Result<Vec<Signal>, String> {
+    pub fn from_str(str: &str) -> Result<Vec<Signal>, String> {
         let mut vec = Vec::new();
         for c in str.chars() {
             match c {
@@ -523,14 +527,53 @@ impl Signal {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct VehicleID(pub usize);
 
+impl<'py> IntoPyObject<'py> for VehicleID {
+    type Target = pyo3::types::PyInt;
+    type Output = Bound<'py, Self::Target>;
+    type Error = std::convert::Infallible;
+
+    fn into_pyobject(self, py: pyo3::prelude::Python<'py>) -> Result<Self::Output, Self::Error> {
+        self.0.into_pyobject(py)
+    }
+}
+
+impl<'py> IntoPyObject<'py> for LaneID {
+    type Target = pyo3::types::PyInt;
+    type Output = Bound<'py, Self::Target>;
+    type Error = std::convert::Infallible;
+
+    fn into_pyobject(self, py: pyo3::prelude::Python<'py>) -> Result<Self::Output, Self::Error> {
+        self.0.into_pyobject(py)
+    }
+}
+
+impl<'py> IntoPyObject<'py> for TrafficLightID {
+    type Target = pyo3::types::PyInt;
+    type Output = Bound<'py, Self::Target>;
+    type Error = std::convert::Infallible;
+
+    fn into_pyobject(self, py: pyo3::prelude::Python<'py>) -> Result<Self::Output, Self::Error> {
+        self.0.into_pyobject(py)
+    }
+}
+
 #[derive(Clone)]
+#[pyclass]
 pub struct Vehicle {
+    #[pyo3(get)]
     pub lane: LaneID,
+    #[pyo3(get)]
     pub lane_position: f64,
+    #[pyo3(get)]
     pub speed: f64,
+    #[pyo3(get)]
     pub acceleration: f64,
+    #[pyo3(get)]
     pub waiting_time: f64,
+    #[pyo3(get)]
     pub time_loss: f64,
+    #[pyo3(get)]
     pub next_trafficlight: Option<TrafficLightID>,
+    #[pyo3(get)]
     pub next_link_index: usize,
 }

@@ -1,3 +1,6 @@
+use log::debug;
+use pyo3::{Bound, IntoPyObject, Py, Python, pyclass};
+
 use crate::simluator::{
     net::{TrafficLightID, Vehicle, VehicleID},
     v2x::{Channel, Communicator, Message},
@@ -14,7 +17,7 @@ impl RSU {
         RSU { data: Vec::new() }
     }
     pub fn on_message(&mut self, msg: Message) {
-        let vehicle = msg.content.downcast::<Vehicle>().unwrap();
+        let vehicle = Python::attach(|py| msg.content.into_bound(py).cast_into().unwrap().unbind());
         let time_send = msg.time_send;
         let time_arrive = msg.time_arrive;
         let from = msg.from;
@@ -57,10 +60,12 @@ impl RSU {
     }
     pub fn report(&mut self, channel: &mut Channel, time: usize) {
         for (tls_id, data) in self.data.iter_mut().enumerate() {
-            let map = Box::new(std::mem::take(data));
+            let map = std::mem::take(data);
+            let size = map.len();
+            let ctx = Python::attach(|py| map.into_pyobject(py).unwrap().unbind().into_any());
             Message::new(
                 channel,
-                map,
+                ctx,
                 Communicator::RSU(TrafficLightID(tls_id)),
                 Communicator::Node(TrafficLightID(tls_id)),
                 time,
@@ -69,8 +74,12 @@ impl RSU {
     }
 }
 
+#[pyclass]
 struct Record {
-    vehicle: Box<Vehicle>,
+    #[pyo3(get)]
+    vehicle: Py<Vehicle>,
+    #[pyo3(get)]
     time_send: usize,
+    #[pyo3(get)]
     time_arrive: usize,
 }
