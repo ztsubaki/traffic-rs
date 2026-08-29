@@ -4,7 +4,6 @@ use rand_distr::{Distribution, Normal};
 
 use crate::conf::CONFIG;
 use crate::simluator::{net::TrafficLightID, net::VehicleID};
-use std::any::Any;
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 

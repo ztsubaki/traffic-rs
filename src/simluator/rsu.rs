@@ -1,5 +1,4 @@
-use log::debug;
-use pyo3::{Bound, IntoPyObject, Py, Python, pyclass};
+use pyo3::{IntoPyObject, Py, Python, pyclass};
 
 use crate::simluator::{
     net::{TrafficLightID, Vehicle, VehicleID},
@@ -61,7 +60,6 @@ impl RSU {
     pub fn report(&mut self, channel: &mut Channel, time: usize) {
         for (tls_id, data) in self.data.iter_mut().enumerate() {
             let map = std::mem::take(data);
-            let size = map.len();
             let ctx = Python::attach(|py| map.into_pyobject(py).unwrap().unbind().into_any());
             Message::new(
                 channel,

@@ -1,27 +1,22 @@
 use log::warn;
-use pyo3::{Bound, IntoPyObject, Py, Python, pyclass};
+use pyo3::{Bound, IntoPyObject, pyclass};
 use std::{
     collections::{HashMap, HashSet},
     ffi::{CStr, CString},
     fmt::Debug,
 };
 
-use crate::{
-    simluator::v2x::{Channel, Communicator, Message},
-    sumo,
-};
+use crate::sumo;
 
 pub struct Net {
     edge_ids: HashMap<CString, EdgeID>,
     junction_ids: HashMap<CString, JunctionID>,
     lane_ids: HashMap<CString, LaneID>,
     trafficlight_ids: HashMap<CString, TrafficLightID>,
-    vehicle_ids: HashMap<CString, VehicleID>,
     edges: Vec<Edge>,
     junctions: Vec<Junction>,
-    lanes: Vec<Lane>,
+    pub lanes: Vec<Lane>,
     trafficlights: Vec<TrafficLight>,
-    vehicles: Vec<Vehicle>,
     num_links: usize,
     num_controlled_links: usize,
     num_phases: usize,
@@ -34,12 +29,10 @@ impl Net {
             junction_ids: HashMap::new(),
             lane_ids: HashMap::new(),
             trafficlight_ids: HashMap::new(),
-            vehicle_ids: HashMap::new(),
             edges: Vec::new(),
             junctions: Vec::new(),
             lanes: Vec::new(),
             trafficlights: Vec::new(),
-            vehicles: Vec::new(),
             num_links: 0,
             num_controlled_links: 0,
             num_phases: 0,
@@ -239,7 +232,7 @@ impl Net {
             <= phase.phase_index
         {
             self.trafficlights[trafficlight.unwrap().0].phases[phase.program_index].push(Phase {
-                sigs: Vec::new(),
+                sigs: Signals::empty(),
                 next: Vec::new(),
             });
         }
@@ -265,7 +258,7 @@ impl Net {
         next.extend_from_slice(unsafe {
             std::slice::from_raw_parts(phase.next_indexs, phase.next_count)
         });
-        let sigs = match Signal::from_str(&state) {
+        let sigs = match Signals::from_str(&state) {
             Ok(s) => s,
             Err(e) => {
                 warn!("Failed to resolve phase state: {}", e);
@@ -292,81 +285,7 @@ impl Net {
         }
         Ok(())
     }
-    pub fn update_vehicle(&mut self, vehicle: &sumo::Vehicle) -> Result<VehicleID, String> {
-        let lane_id_cstr = unsafe { CStr::from_ptr(vehicle.lane_id) };
-        let lane_id = match self.get_lane_id(lane_id_cstr) {
-            Some(id) => id,
-            None => {
-                return Err(format!(
-                    "Can not found lane {:?} for vehicle {:?}",
-                    lane_id_cstr, vehicle.id
-                ));
-            }
-        };
-        let next_tls_id_cstr = unsafe { CStr::from_ptr(vehicle.next_trafficlight) };
-        let next_tls_id = if next_tls_id_cstr.is_empty() {
-            None
-        } else {
-            match self.get_trafficlight_id(next_tls_id_cstr) {
-                Some(id) => Some(id),
-                None => {
-                    return Err(format!(
-                        "Can not found trafficlight {:?} for vehicle {:?}",
-                        next_tls_id_cstr, vehicle.id
-                    ));
-                }
-            }
-        };
-        let vehicle_id_cstr = unsafe { CStr::from_ptr(vehicle.id) };
-        if vehicle_id_cstr.is_empty() {
-            return Err("Empty vehicle id".to_string());
-        }
-        Ok(match self.vehicle_ids.get(vehicle_id_cstr) {
-            Some(id) => {
-                self.vehicles[id.0].lane = lane_id;
-                self.vehicles[id.0].next_trafficlight = next_tls_id;
-                self.vehicles[id.0].lane_position = vehicle.lane_position;
-                self.vehicles[id.0].speed = vehicle.speed;
-                self.vehicles[id.0].acceleration = vehicle.acceleration;
-                self.vehicles[id.0].waiting_time = vehicle.waiting_time;
-                self.vehicles[id.0].time_loss = vehicle.time_loss;
-                self.vehicles[id.0].next_link_index = vehicle.next_link_index;
-                *id
-            }
-            None => {
-                self.vehicle_ids
-                    .insert(vehicle_id_cstr.to_owned(), VehicleID(self.vehicles.len()));
-                self.vehicles.push(Vehicle {
-                    lane: lane_id,
-                    next_trafficlight: next_tls_id,
-                    lane_position: vehicle.lane_position,
-                    speed: vehicle.speed,
-                    acceleration: vehicle.acceleration,
-                    waiting_time: vehicle.waiting_time,
-                    time_loss: vehicle.time_loss,
-                    next_link_index: vehicle.next_link_index,
-                });
-                VehicleID(self.vehicle_ids.len() - 1)
-            }
-        })
-    }
-    pub fn send_v2x(&self, vehicle_id: &VehicleID, v2x: &mut Channel, time: usize) {
-        let vehicle = &self.vehicles[vehicle_id.0];
-        let lane = &self.lanes[vehicle.lane.0];
 
-        let ctx = Python::attach(|py| Py::new(py, vehicle.clone()).unwrap().into_any());
-
-        for tls_id in &lane.trafficlight {
-            let ctx_ref = Python::attach(|py| ctx.clone_ref(py));
-            Message::new(
-                v2x,
-                ctx_ref,
-                Communicator::Vehicle(*vehicle_id),
-                Communicator::RSU(*tls_id),
-                time,
-            );
-        }
-    }
     pub fn edge_count(&self) -> usize {
         self.edge_ids.len()
     }
@@ -391,71 +310,122 @@ impl Net {
     pub fn get_trafficlight_id(&self, trafficlight: &CStr) -> Option<TrafficLightID> {
         self.trafficlight_ids.get(trafficlight).copied()
     }
+    pub fn get_trafficlight(&self, trafficlight_id: TrafficLightID) -> Option<&TrafficLight> {
+        if self.trafficlights.len() > trafficlight_id.0 {
+            Some(&self.trafficlights[trafficlight_id.0])
+        } else {
+            None
+        }
+    }
+    pub fn get_lane(&self, lane_id: LaneID) -> Option<&Lane> {
+        if self.lanes.len() > lane_id.0 {
+            Some(&self.lanes[lane_id.0])
+        } else {
+            None
+        }
+    }
+    pub fn get_edge(&self, edge_id: EdgeID) -> Option<&Edge> {
+        if self.edges.len() > edge_id.0 {
+            Some(&self.edges[edge_id.0])
+        } else {
+            None
+        }
+    }
+    pub fn get_junction(&self, junction_id: JunctionID) -> Option<&Junction> {
+        if self.junctions.len() > junction_id.0 {
+            Some(&self.junctions[junction_id.0])
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct EdgeID(usize);
+pub struct EdgeID(pub usize);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct JunctionID(usize);
+pub struct JunctionID(pub usize);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct LaneID(usize);
+pub struct LaneID(pub usize);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct TrafficLightID(pub usize);
 
+#[derive(Clone)]
+#[pyclass(frozen, skip_from_py_object)]
 pub struct Edge {
+    #[pyo3(get)]
     id: String,
+    #[pyo3(get)]
     name: String,
+    #[pyo3(get)]
     from: Option<JunctionID>,
+    #[pyo3(get)]
     to: Option<JunctionID>,
+    #[pyo3(get)]
     lane_number: usize,
 }
 
+#[derive(Clone)]
+#[pyclass(frozen, skip_from_py_object)]
 pub struct Junction {
+    #[pyo3(get)]
     id: String,
 }
 
+#[derive(Clone)]
+#[pyclass(frozen, skip_from_py_object)]
 pub struct Lane {
-    id: String,
-    edge_id: Option<EdgeID>,
-    length: f64,
-    links: Vec<Link>,
-    trafficlight: HashSet<TrafficLightID>,
+    #[pyo3(get)]
+    pub id: String,
+    #[pyo3(get)]
+    pub edge_id: Option<EdgeID>,
+    pub length: f64,
+    #[pyo3(get)]
+    pub links: Vec<Link>,
+    #[pyo3(get)]
+    pub trafficlight: HashSet<TrafficLightID>,
 }
 
+#[derive(Clone)]
+#[pyclass(frozen, skip_from_py_object)]
 pub struct TrafficLight {
+    #[pyo3(get)]
     id: String,
+    #[pyo3(get)]
     links: Vec<Vec<Link>>,
+    #[pyo3(get)]
     phases: Vec<Vec<Phase>>,
 }
 
+#[pyclass(frozen, skip_from_py_object)]
+#[derive(Clone)]
 pub struct Link {
+    #[pyo3(get)]
     from: LaneID,
+    #[pyo3(get)]
     via: Option<LaneID>,
+    #[pyo3(get)]
     to: LaneID,
 }
 
+#[pyclass(frozen, skip_from_py_object)]
+#[derive(Clone)]
 pub struct Phase {
-    sigs: Vec<Signal>,
+    #[pyo3(get)]
+    sigs: Signals,
+    #[pyo3(get)]
     next: Vec<usize>,
 }
 
-#[allow(non_camel_case_types)]
-pub enum Signal {
-    r,
-    u,
-    G,
-    g,
-    Y,
-    y,
-    o,
-    O,
+#[derive(Clone)]
+pub struct Signals {
+    inner: Vec<Signal>,
 }
 
-impl Signal {
-    pub fn from_str(str: &str) -> Result<Vec<Signal>, String> {
+impl Signals {
+    pub fn from_str(str: &str) -> Result<Self, String> {
         let mut vec = Vec::new();
         for c in str.chars() {
             match c {
@@ -488,11 +458,11 @@ impl Signal {
                 }
             }
         }
-        Ok(vec)
+        Ok(Self { inner: vec })
     }
-    fn to_str(sigs: &[Signal]) -> String {
+    pub fn to_str(&self) -> String {
         let mut str = String::new();
-        for sig in sigs {
+        for sig in &self.inner {
             match sig {
                 Signal::r => {
                     str.push('r');
@@ -522,6 +492,25 @@ impl Signal {
         }
         str
     }
+    pub fn empty() -> Self {
+        Self { inner: Vec::new() }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+}
+
+#[derive(Clone)]
+#[allow(non_camel_case_types)]
+enum Signal {
+    r,
+    u,
+    G,
+    g,
+    Y,
+    y,
+    o,
+    O,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -547,6 +536,24 @@ impl<'py> IntoPyObject<'py> for LaneID {
     }
 }
 
+impl<'py> IntoPyObject<'py> for EdgeID {
+    type Target = pyo3::types::PyInt;
+    type Output = Bound<'py, Self::Target>;
+    type Error = std::convert::Infallible;
+
+    fn into_pyobject(self, py: pyo3::prelude::Python<'py>) -> Result<Self::Output, Self::Error> {
+        self.0.into_pyobject(py)
+    }
+}
+impl<'py> IntoPyObject<'py> for JunctionID {
+    type Target = pyo3::types::PyInt;
+    type Output = Bound<'py, Self::Target>;
+    type Error = std::convert::Infallible;
+
+    fn into_pyobject(self, py: pyo3::prelude::Python<'py>) -> Result<Self::Output, Self::Error> {
+        self.0.into_pyobject(py)
+    }
+}
 impl<'py> IntoPyObject<'py> for TrafficLightID {
     type Target = pyo3::types::PyInt;
     type Output = Bound<'py, Self::Target>;
@@ -557,8 +564,18 @@ impl<'py> IntoPyObject<'py> for TrafficLightID {
     }
 }
 
+impl<'py> IntoPyObject<'py> for Signals {
+    type Target = pyo3::types::PyString;
+    type Output = Bound<'py, Self::Target>;
+    type Error = std::convert::Infallible;
+
+    fn into_pyobject(self, py: pyo3::prelude::Python<'py>) -> Result<Self::Output, Self::Error> {
+        self.to_str().into_pyobject(py)
+    }
+}
+
 #[derive(Clone)]
-#[pyclass]
+#[pyclass(frozen, skip_from_py_object)]
 pub struct Vehicle {
     #[pyo3(get)]
     pub lane: LaneID,

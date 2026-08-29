@@ -1,9 +1,7 @@
 use pyo3::{Py, PyAny, Python, pyclass, pymethods, types::PyAnyMethods};
 
-use crate::simluator::{
-    net::{Net, Signal},
-    v2x::{Channel, Communicator, Message},
-};
+use crate::simluator::PyNet;
+use crate::simluator::v2x::{Channel, Communicator, Message};
 
 pub struct Cloud {
     obj: Py<PyAny>,
@@ -13,7 +11,7 @@ impl Cloud {
     pub fn new(obj: Py<PyAny>) -> Self {
         Cloud { obj }
     }
-    pub fn on_tick(&mut self, time: usize, v2x: &mut Channel, net: &Net) {
+    pub fn on_tick(&mut self, time: usize, v2x: &mut Channel) {
         Python::attach(|py| {
             self.obj
                 .bind(py)
@@ -23,7 +21,7 @@ impl Cloud {
         .unwrap();
         self.post_hook(time, v2x);
     }
-    pub fn on_message(&mut self, msg: Message, v2x: &mut Channel, net: &Net) {
+    pub fn on_message(&mut self, msg: Message, v2x: &mut Channel) {
         let from = match msg.from {
             Communicator::Node(tls_id) => Some(tls_id.0),
             _ => {
@@ -38,10 +36,11 @@ impl Cloud {
                     (msg.time_send, msg.time_arrive, from, msg.content),
                 )
                 .map(|_| {})
-        });
+        })
+        .unwrap();
         self.post_hook(msg.time_arrive, v2x);
     }
-    pub fn on_create(&mut self, v2x: &mut Channel, net: &Net) {
+    pub fn on_create(&mut self, v2x: &mut Channel) {
         Python::attach(|py| self.obj.bind(py).call_method0("on_create").map(|_| {})).unwrap();
         self.post_hook(0, v2x);
     }
@@ -62,14 +61,17 @@ impl Cloud {
 #[pyclass(subclass)]
 pub struct CloudBase {
     messages: Vec<Message>,
+    #[pyo3(get)]
+    net: Py<PyNet>,
 }
 
 #[pymethods]
 impl CloudBase {
     #[new]
-    fn new() -> Self {
+    fn new(net: Py<PyNet>) -> Self {
         CloudBase {
             messages: Vec::new(),
+            net,
         }
     }
 

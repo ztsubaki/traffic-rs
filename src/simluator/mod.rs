@@ -4,33 +4,38 @@ mod node;
 mod rsu;
 mod v2x;
 
-use std::{ffi::CStr, str::FromStr};
+use std::{collections::HashMap, ffi::CStr, ffi::CString, str::FromStr, sync::Arc};
 
+use crate::simluator::net::{
+    Edge, EdgeID, Junction, JunctionID, Lane, LaneID, TrafficLight, TrafficLightID,
+};
+use crate::sumo;
 use crate::{
     Sumo,
     conf::CONFIG,
     simluator::{
         cloud::{Cloud, CloudBase},
+        net::{Vehicle, VehicleID},
         node::Node,
         v2x::Communicator,
     },
 };
-use log::{debug, error, trace};
+use log::{error, trace};
 use net::Net;
 use node::NodeBase;
-use pyo3::{Bound, PyResult, Python, pymodule};
+use pyo3::{Bound, IntoPyObject, PyResult, Python, pymethods, pymodule};
 use pyo3::{
-    Py, pyfunction,
+    Py, pyclass, pyfunction,
     types::{PyModule, PyModuleMethods},
     wrap_pyfunction,
 };
 use rand_distr::Normal;
 use rsu::RSU;
-use v2x::Channel;
+use v2x::{Channel, Message};
 
 pub struct Simluator {
     sumo: Sumo,
-    net: Net,
+    net: Arc<Net>,
     rsu: RSU,
     v2x: Channel,
     pub time_begin: usize,
@@ -39,6 +44,8 @@ pub struct Simluator {
     pub step_current: usize,
     nodes: Vec<Node>,
     cloud: Cloud,
+    vehicles: Vec<Vehicle>,
+    vehicle_ids: HashMap<CString, VehicleID>,
 }
 
 impl Simluator {
@@ -86,6 +93,7 @@ impl Simluator {
             error!("Check road net failed: {}", e);
             std::process::exit(1);
         });
+        let net = Arc::new(net);
         let mut v2x = v2x::Channel::new(cloud_delay_generator);
         let mut nodes = Vec::<Node>::new();
         Python::attach(|py| {
@@ -97,17 +105,21 @@ impl Simluator {
                 }
             };
             for id in 0..tls_count {
-                nodes.push(match node_class.call1(py, (id,)) {
+                let net = Arc::clone(&net);
+                let pynet = PyNet::new(net).into_pyobject(py).unwrap();
+                nodes.push(match node_class.call1(py, (id, pynet)) {
                     Ok(r) => Node::new(r),
                     Err(e) => {
                         error!("Failed to init Node: {}", e);
                         std::process::exit(1);
                     }
                 });
-                nodes.last_mut().unwrap().on_create(&mut v2x, &net);
+                nodes.last_mut().unwrap().on_create(&mut v2x);
             }
         });
         let mut cloud = Python::attach(|py| {
+            let net = Arc::clone(&net);
+            let pynet = PyNet::new(net).into_pyobject(py).unwrap();
             match match module.getattr(py, "Cloud") {
                 Ok(r) => r,
                 Err(e) => {
@@ -115,7 +127,7 @@ impl Simluator {
                     std::process::exit(1);
                 }
             }
-            .call0(py)
+            .call1(py, (pynet,))
             {
                 Ok(r) => Cloud::new(r),
                 Err(e) => {
@@ -124,7 +136,7 @@ impl Simluator {
                 }
             }
         });
-        cloud.on_create(&mut v2x, &net);
+        cloud.on_create(&mut v2x);
         Simluator {
             sumo,
             net,
@@ -136,7 +148,67 @@ impl Simluator {
             step_current: 0,
             nodes,
             cloud,
+            vehicles: Vec::new(),
+            vehicle_ids: HashMap::new(),
         }
+    }
+    fn update_vehicle(&mut self, vehicle: &sumo::Vehicle) -> Result<VehicleID, String> {
+        let lane_id_cstr = unsafe { CStr::from_ptr(vehicle.lane_id) };
+        let lane_id = match self.net.get_lane_id(lane_id_cstr) {
+            Some(id) => id,
+            None => {
+                return Err(format!(
+                    "Can not found lane {:?} for vehicle {:?}",
+                    lane_id_cstr, vehicle.id
+                ));
+            }
+        };
+        let next_tls_id_cstr = unsafe { CStr::from_ptr(vehicle.next_trafficlight) };
+        let next_tls_id = if next_tls_id_cstr.is_empty() {
+            None
+        } else {
+            match self.net.get_trafficlight_id(next_tls_id_cstr) {
+                Some(id) => Some(id),
+                None => {
+                    return Err(format!(
+                        "Can not found trafficlight {:?} for vehicle {:?}",
+                        next_tls_id_cstr, vehicle.id
+                    ));
+                }
+            }
+        };
+        let vehicle_id_cstr = unsafe { CStr::from_ptr(vehicle.id) };
+        if vehicle_id_cstr.is_empty() {
+            return Err("Empty vehicle id".to_string());
+        }
+        Ok(match self.vehicle_ids.get(vehicle_id_cstr) {
+            Some(id) => {
+                self.vehicles[id.0].lane = lane_id;
+                self.vehicles[id.0].next_trafficlight = next_tls_id;
+                self.vehicles[id.0].lane_position = vehicle.lane_position;
+                self.vehicles[id.0].speed = vehicle.speed;
+                self.vehicles[id.0].acceleration = vehicle.acceleration;
+                self.vehicles[id.0].waiting_time = vehicle.waiting_time;
+                self.vehicles[id.0].time_loss = vehicle.time_loss;
+                self.vehicles[id.0].next_link_index = vehicle.next_link_index;
+                *id
+            }
+            None => {
+                self.vehicle_ids
+                    .insert(vehicle_id_cstr.to_owned(), VehicleID(self.vehicles.len()));
+                self.vehicles.push(Vehicle {
+                    lane: lane_id,
+                    next_trafficlight: next_tls_id,
+                    lane_position: vehicle.lane_position,
+                    speed: vehicle.speed,
+                    acceleration: vehicle.acceleration,
+                    waiting_time: vehicle.waiting_time,
+                    time_loss: vehicle.time_loss,
+                    next_link_index: vehicle.next_link_index,
+                });
+                VehicleID(self.vehicle_ids.len() - 1)
+            }
+        })
     }
 
     pub fn is_end(&self) -> bool {
@@ -151,26 +223,26 @@ impl Simluator {
         let vehicles = self.sumo.get_vehicles()?;
         trace!("Collect {} vehicles", vehicles.as_slice().len());
         for veh in vehicles.as_slice() {
-            let vehicle = self.net.update_vehicle(veh)?;
-            self.net.send_v2x(&vehicle, &mut self.v2x, time);
+            let vehicle = self.update_vehicle(veh)?;
+            self.send_v2x(&vehicle, time);
         }
         if self.step_current.is_multiple_of(CONFIG.rsu_report_interval) {
             self.rsu.report(&mut self.v2x, time);
         }
         trace!("Message quene count {}", self.message_count());
         for node in self.nodes.iter_mut() {
-            node.on_tick(time, &mut self.v2x, &self.net);
+            node.on_tick(time, &mut self.v2x);
         }
-        self.cloud.on_tick(time, &mut self.v2x, &self.net);
+        self.cloud.on_tick(time, &mut self.v2x);
         while self.v2x.latset_time().is_some() && self.v2x.latset_time().unwrap() < time + self.step
         {
             let msg = self.v2x.pop().unwrap();
             match msg.to {
                 Communicator::Cloud => {
-                    self.cloud.on_message(msg, &mut self.v2x, &self.net);
+                    self.cloud.on_message(msg, &mut self.v2x);
                 }
                 Communicator::Node(tls_id) => {
-                    self.nodes[tls_id.0].on_message(msg, &mut self.v2x, &self.net);
+                    self.nodes[tls_id.0].on_message(msg, &mut self.v2x);
                 }
                 Communicator::RSU(_) => {
                     self.rsu.on_message(msg);
@@ -184,7 +256,23 @@ impl Simluator {
         self.step_current += 1;
         Ok(())
     }
+    pub fn send_v2x(&mut self, vehicle_id: &VehicleID, time: usize) {
+        let vehicle = &self.vehicles[vehicle_id.0];
+        let lane = &self.net.lanes[vehicle.lane.0];
 
+        let ctx = Python::attach(|py| Py::new(py, vehicle.clone()).unwrap().into_any());
+
+        for tls_id in &lane.trafficlight {
+            let ctx_ref = Python::attach(|py| ctx.clone_ref(py));
+            Message::new(
+                &mut self.v2x,
+                ctx_ref,
+                Communicator::Vehicle(*vehicle_id),
+                Communicator::RSU(*tls_id),
+                time,
+            );
+        }
+    }
     #[allow(unused)]
     pub fn vehicle_list(&self) -> Result<Vec<String>, String> {
         let vec = self.sumo.get_vehicles()?;
@@ -217,6 +305,33 @@ fn hello_world() {
 pub fn trafficrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NodeBase>()?;
     m.add_class::<CloudBase>()?;
-    let _ = m.add_function(wrap_pyfunction!(hello_world, m)?);
+    m.add_function(wrap_pyfunction!(hello_world, m)?)?;
     Ok(())
+}
+
+#[pyclass(frozen)]
+pub struct PyNet {
+    inner: Arc<Net>,
+}
+
+impl PyNet {
+    pub fn new(net: Arc<Net>) -> Self {
+        Self { inner: net }
+    }
+}
+
+#[pymethods]
+impl PyNet {
+    fn get_trafficlight(&self, id: usize) -> Option<TrafficLight> {
+        self.inner.get_trafficlight(TrafficLightID(id)).cloned()
+    }
+    fn get_lane(&self, id: usize) -> Option<Lane> {
+        self.inner.get_lane(LaneID(id)).cloned()
+    }
+    fn get_edge(&self, id: usize) -> Option<Edge> {
+        self.inner.get_edge(EdgeID(id)).cloned()
+    }
+    fn get_junction(&self, id: usize) -> Option<Junction> {
+        self.inner.get_junction(JunctionID(id)).cloned()
+    }
 }

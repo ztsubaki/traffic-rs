@@ -1,9 +1,8 @@
-use core::net;
-
 use pyo3::{Py, PyAny, Python, pyclass, pymethods, types::PyAnyMethods};
 
 use crate::simluator::{
-    net::{Net, Signal},
+    PyNet,
+    net::Signals,
     v2x::{Channel, Communicator, Message},
 };
 
@@ -15,7 +14,7 @@ impl Node {
     pub fn new(obj: Py<PyAny>) -> Self {
         Node { obj }
     }
-    pub fn on_tick(&mut self, time: usize, v2x: &mut Channel, net: &Net) {
+    pub fn on_tick(&mut self, time: usize, v2x: &mut Channel) {
         Python::attach(|py| {
             self.obj
                 .bind(py)
@@ -25,7 +24,7 @@ impl Node {
         .unwrap();
         self.post_hook(time, v2x);
     }
-    pub fn on_message(&mut self, msg: Message, v2x: &mut Channel, net: &Net) {
+    pub fn on_message(&mut self, msg: Message, v2x: &mut Channel) {
         let from = match msg.from {
             Communicator::Cloud => None,
             Communicator::RSU(tls_id) => Some(tls_id.0),
@@ -41,10 +40,11 @@ impl Node {
                     (msg.time_send, msg.time_arrive, from, msg.content),
                 )
                 .map(|_| {})
-        });
+        })
+        .unwrap();
         self.post_hook(msg.time_arrive, v2x);
     }
-    pub fn on_create(&mut self, v2x: &mut Channel, net: &Net) {
+    pub fn on_create(&mut self, v2x: &mut Channel) {
         Python::attach(|py| self.obj.bind(py).call_method0("on_create").map(|_| {})).unwrap();
         self.post_hook(0, v2x);
     }
@@ -66,16 +66,19 @@ impl Node {
 pub struct NodeBase {
     #[pyo3(get)]
     node_id: usize,
+    #[pyo3(get)]
+    net: Py<PyNet>,
     messages: Vec<Message>,
-    action: Option<Vec<Signal>>,
+    action: Option<Signals>,
 }
 
 #[pymethods]
 impl NodeBase {
     #[new]
-    fn new(id: usize) -> Self {
+    fn new(id: usize, net: Py<PyNet>) -> Self {
         NodeBase {
             node_id: id,
+            net,
             messages: Vec::new(),
             action: None,
         }
@@ -110,7 +113,7 @@ impl NodeBase {
     }
 
     fn set_signal(&mut self, signals: String) {
-        self.action = Signal::from_str(&signals).map_or(None, |v| Some(v));
+        self.action = Signals::from_str(&signals).ok();
     }
 }
 
@@ -118,7 +121,7 @@ impl NodeBase {
     pub fn get_messages(&mut self) -> Vec<Message> {
         std::mem::take(&mut self.messages)
     }
-    pub fn get_action(&mut self) -> Option<Vec<Signal>> {
+    pub fn get_action(&mut self) -> Option<Signals> {
         std::mem::take(&mut self.action)
     }
 }
