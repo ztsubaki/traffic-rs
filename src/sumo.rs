@@ -194,6 +194,7 @@ unsafe extern "C" {
     fn sumo_close() -> Payload;
     fn get_parameter(obj: *const c_char, para: *const c_char) -> Payload;
     fn get_option(opt: *const c_char) -> Payload;
+    fn set_trafficlight(trafficlight_id: *const c_char, state: *const c_char) -> Payload;
     fn get_edges() -> Payload;
     fn get_vehicles() -> Payload;
     fn get_junctions() -> Payload;
@@ -341,6 +342,14 @@ impl Sumo {
             }
             Err(e) => Err(e),
         }
+    }
+    pub fn set_trafficlight(&self, trafficlight_id: &str, state: &str) -> Result<(), String> {
+        resolve_c_result_no_paylod(unsafe {
+            set_trafficlight(
+                CString::new(trafficlight_id).unwrap().as_ptr(),
+                CString::new(state).unwrap().as_ptr(),
+            )
+        })
     }
 }
 

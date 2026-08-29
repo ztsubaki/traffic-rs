@@ -9,6 +9,9 @@ class Node(trafficrs.NodeBase):
         #        if time % 1000000 == 0:
         #            print(f"Node {self.node_id} tick {time}")
         #            self.send_to_cloud("hello")
+        if time == 0:
+            sign = "r" * len(self.net.get_trafficlight(self.node_id).links)
+            self.set_signal(sign)
         return
 
     def on_message(self, time_send, time_receive, sender, content):

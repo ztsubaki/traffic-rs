@@ -24,8 +24,12 @@ use crate::simluator::Simluator;
 #[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "a traffic simulator based on libsumo and use for evaluate python traffic control algorithm", long_about = None)]
 pub struct Args {
+    /// config file path
     #[arg(short, long, value_name = "CONFIG FILE")]
     pub config: Option<PathBuf>,
+    /// do not apply plugin, just use SUMO
+    #[arg(long)]
+    pub baseline: bool,
 }
 
 lazy_static::lazy_static! {
@@ -198,12 +202,16 @@ trafficrs.hello_world()
         .unbind()
     });
 
+    if ARGS.baseline {
+        info!("Using baseline mode");
+    }
+
     let cloud_delay_generator = Normal::new(
         CONFIG.cloud_delay_mean as f32,
         CONFIG.cloud_delay_std_dev as f32,
     )
     .unwrap();
-    let mut simluator = Simluator::init(sumo, cloud_delay_generator, module);
+    let mut simluator = Simluator::init(sumo, cloud_delay_generator, module, ARGS.baseline);
     info!("Inited Simluator");
 
     let global_start = Instant::now();

@@ -392,9 +392,9 @@ pub struct Lane {
 #[pyclass(frozen, skip_from_py_object)]
 pub struct TrafficLight {
     #[pyo3(get)]
-    id: String,
+    pub id: String,
     #[pyo3(get)]
-    links: Vec<Vec<Link>>,
+    pub links: Vec<Vec<Link>>,
     #[pyo3(get)]
     phases: Vec<Vec<Phase>>,
 }

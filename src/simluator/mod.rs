@@ -46,10 +46,16 @@ pub struct Simluator {
     cloud: Cloud,
     vehicles: Vec<Vehicle>,
     vehicle_ids: HashMap<CString, VehicleID>,
+    baseline: bool,
 }
 
 impl Simluator {
-    pub fn init(sumo: Sumo, cloud_delay_generator: Normal<f32>, module: Py<PyModule>) -> Simluator {
+    pub fn init(
+        sumo: Sumo,
+        cloud_delay_generator: Normal<f32>,
+        module: Py<PyModule>,
+        baseline: bool,
+    ) -> Simluator {
         let time_begin = sumo.time_begin().unwrap();
         let time_end = sumo.time_end().unwrap();
         let step = sumo.step_length().unwrap();
@@ -150,6 +156,7 @@ impl Simluator {
             cloud,
             vehicles: Vec::new(),
             vehicle_ids: HashMap::new(),
+            baseline,
         }
     }
     fn update_vehicle(&mut self, vehicle: &sumo::Vehicle) -> Result<VehicleID, String> {
@@ -220,35 +227,79 @@ impl Simluator {
             return Err(String::from_str("Simluation ended").unwrap());
         }
         let time = self.time_begin + self.step_current * self.step;
-        let vehicles = self.sumo.get_vehicles()?;
-        trace!("Collect {} vehicles", vehicles.as_slice().len());
-        for veh in vehicles.as_slice() {
-            let vehicle = self.update_vehicle(veh)?;
-            self.send_v2x(&vehicle, time);
-        }
-        if self.step_current.is_multiple_of(CONFIG.rsu_report_interval) {
-            self.rsu.report(&mut self.v2x, time);
-        }
-        trace!("Message quene count {}", self.message_count());
-        for node in self.nodes.iter_mut() {
-            node.on_tick(time, &mut self.v2x);
-        }
-        self.cloud.on_tick(time, &mut self.v2x);
-        while self.v2x.latset_time().is_some() && self.v2x.latset_time().unwrap() < time + self.step
-        {
-            let msg = self.v2x.pop().unwrap();
-            match msg.to {
-                Communicator::Cloud => {
-                    self.cloud.on_message(msg, &mut self.v2x);
-                }
-                Communicator::Node(tls_id) => {
-                    self.nodes[tls_id.0].on_message(msg, &mut self.v2x);
-                }
-                Communicator::RSU(_) => {
-                    self.rsu.on_message(msg);
-                }
-                Communicator::Vehicle(_) => {
-                    unreachable!("Can not send message to vehicle in current version");
+        if !self.baseline {
+            let vehicles = self.sumo.get_vehicles()?;
+            trace!("Collect {} vehicles", vehicles.as_slice().len());
+            for veh in vehicles.as_slice() {
+                let vehicle = self.update_vehicle(veh)?;
+                self.send_v2x(&vehicle, time);
+            }
+            if self.step_current.is_multiple_of(CONFIG.rsu_report_interval) {
+                self.rsu.report(&mut self.v2x, time);
+            }
+            trace!("Message quene count {}", self.message_count());
+            for id in 0..self.nodes.len() {
+                let tls_id = TrafficLightID(id);
+                if let Some(sig) = self.nodes[id].on_tick(time, &mut self.v2x)
+                    && let Some(tls) = self.net.get_trafficlight(tls_id)
+                {
+                    let sig = sig.to_str();
+                    if sig.len() == tls.links.len() {
+                        if let Err(e) = self.sumo.set_trafficlight(&tls.id, &sig) {
+                            log::warn!(
+                                "Failed to set trafficlight for {:?} to {}: {}",
+                                tls_id,
+                                sig,
+                                e
+                            );
+                        };
+                    } else {
+                        log::warn!(
+                            "Failed to set trafficlight for {:?} to {}: wrong length",
+                            tls_id,
+                            sig
+                        );
+                    }
+                };
+            }
+            self.cloud.on_tick(time, &mut self.v2x);
+            while self.v2x.latset_time().is_some()
+                && self.v2x.latset_time().unwrap() < time + self.step
+            {
+                let msg = self.v2x.pop().unwrap();
+                match msg.to {
+                    Communicator::Cloud => {
+                        self.cloud.on_message(msg, &mut self.v2x);
+                    }
+                    Communicator::Node(tls_id) => {
+                        if let Some(sig) = self.nodes[tls_id.0].on_message(msg, &mut self.v2x)
+                            && let Some(tls) = self.net.get_trafficlight(tls_id)
+                        {
+                            let sig = sig.to_str();
+                            if sig.len() == tls.links.len() {
+                                if let Err(e) = self.sumo.set_trafficlight(&tls.id, &sig) {
+                                    log::warn!(
+                                        "Failed to set trafficlight for {:?} to {}: {}",
+                                        tls_id,
+                                        sig,
+                                        e
+                                    );
+                                };
+                            } else {
+                                log::warn!(
+                                    "Failed to set trafficlight for {:?} to {}: wrong length",
+                                    tls_id,
+                                    sig
+                                );
+                            }
+                        };
+                    }
+                    Communicator::RSU(_) => {
+                        self.rsu.on_message(msg);
+                    }
+                    Communicator::Vehicle(_) => {
+                        unreachable!("Can not send message to vehicle in current version");
+                    }
                 }
             }
         }

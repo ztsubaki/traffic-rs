@@ -99,6 +99,16 @@ Payload get_option(char* opt) {
     return Payload{BRIDGE_SUCCESS, (void*)result, 0};
 }
 
+Payload set_trafficlight(const char* trafficlight_id, const char* state) {
+    try {
+        libsumo::TrafficLight::setRedYellowGreenState(
+            std::string(trafficlight_id), std::string(state));
+    } catch (const std::exception& e) {
+        return report_exception(e);
+    }
+    return Payload{BRIDGE_SUCCESS, 0, 0};
+}
+
 Payload get_vehicles() {
     Vehicle* vehicles = NULL;
     size_t size = 0;

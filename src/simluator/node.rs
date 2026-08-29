@@ -14,7 +14,7 @@ impl Node {
     pub fn new(obj: Py<PyAny>) -> Self {
         Node { obj }
     }
-    pub fn on_tick(&mut self, time: usize, v2x: &mut Channel) {
+    pub fn on_tick(&mut self, time: usize, v2x: &mut Channel) -> Option<Signals> {
         Python::attach(|py| {
             self.obj
                 .bind(py)
@@ -22,14 +22,14 @@ impl Node {
                 .map(|_| {})
         })
         .unwrap();
-        self.post_hook(time, v2x);
+        self.post_hook(time, v2x)
     }
-    pub fn on_message(&mut self, msg: Message, v2x: &mut Channel) {
+    pub fn on_message(&mut self, msg: Message, v2x: &mut Channel) -> Option<Signals> {
         let from = match msg.from {
             Communicator::Cloud => None,
             Communicator::RSU(tls_id) => Some(tls_id.0),
             _ => {
-                return;
+                return None;
             }
         };
         Python::attach(|py| {
@@ -42,23 +42,20 @@ impl Node {
                 .map(|_| {})
         })
         .unwrap();
-        self.post_hook(msg.time_arrive, v2x);
+        self.post_hook(msg.time_arrive, v2x)
     }
-    pub fn on_create(&mut self, v2x: &mut Channel) {
+    pub fn on_create(&mut self, v2x: &mut Channel) -> Option<Signals> {
         Python::attach(|py| self.obj.bind(py).call_method0("on_create").map(|_| {})).unwrap();
-        self.post_hook(0, v2x);
+        self.post_hook(0, v2x)
     }
-    fn post_hook(&mut self, time: usize, v2x: &mut Channel) {
-        for message in Python::attach(|py| {
-            self.obj
-                .bind(py)
-                .cast::<NodeBase>()
-                .unwrap()
-                .borrow_mut()
-                .get_messages()
-        }) {
-            Message::new(v2x, message.content, message.from, message.to, time);
-        }
+    fn post_hook(&mut self, time: usize, v2x: &mut Channel) -> Option<Signals> {
+        Python::attach(|py| {
+            let mut obj = self.obj.bind(py).cast::<NodeBase>().unwrap().borrow_mut();
+            for message in obj.get_messages() {
+                Message::new(v2x, message.content, message.from, message.to, time);
+            }
+            obj.get_action()
+        })
     }
 }
 
@@ -113,7 +110,13 @@ impl NodeBase {
     }
 
     fn set_signal(&mut self, signals: String) {
-        self.action = Signals::from_str(&signals).ok();
+        self.action = match Signals::from_str(&signals) {
+            Ok(sig) => Some(sig),
+            Err(e) => {
+                log::warn!("Can not resolve signals: {}", e);
+                return;
+            }
+        };
     }
 }
 

@@ -65,6 +65,7 @@ struct Payload sumo_step();
 struct Payload sumo_close();
 struct Payload get_parameter(char* obj, char* para);
 struct Payload get_option(char* opt);
+struct Payload set_trafficlight(const char* trafficlight_id, const char* state);
 struct Payload get_vehicles();
 struct Payload get_edges();
 struct Payload get_junctions();
