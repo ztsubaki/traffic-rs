@@ -21,7 +21,13 @@ Run `traffic-rs` without any arguments to generate a default config in current d
 Use command below to begin simluation:
 
 ```sh
-RUST_LOG=info traffic-rs -c ./conf.toml
+traffic-rs -c ./conf.toml
 ```
 
+### Python Plugin
 
+The traffic algorithm Python plugin defines class Node and Cloud, they can get data from PyNet object, which is a read only reference for Net, you can see `src/simulator/mod.rs` and `src/simulator/net.rs` for details.
+
+The plugin cloud apply V2X communications between Node and Cloud, nodes will receive vehicles data from RSU every interval you configured.
+
+A example plugin generate by LLM is in `examples/plugin.py`.
