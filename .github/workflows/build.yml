@@ -54,6 +54,7 @@ jobs:
         mkdir traffic-rs
         mv ./target/release/traffic-rs ./traffic-rs/
         cp -r ./examples ./traffic-rs/
+        cp ./README.md ./traffic-rs/
         tar -czf ./traffic-rs-linux-x86_64.tar.gz ./traffic-rs
     - name: Update preview release
       env:
