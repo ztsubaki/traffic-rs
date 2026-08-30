@@ -1,10 +1,11 @@
 use pyo3::{IntoPyObject, Py, Python, pyclass};
+use std::collections::HashMap;
 
-use crate::simluator::{
-    net::{TrafficLightID, Vehicle, VehicleID},
+use crate::simulator::{
+    Vehicle, VehicleID,
+    net::TrafficLightID,
     v2x::{Channel, Communicator, Message},
 };
-use std::collections::HashMap;
 
 #[allow(clippy::upper_case_acronyms)]
 pub struct RSU {
@@ -21,26 +22,16 @@ impl RSU {
         let time_arrive = msg.time_arrive;
         let from = msg.from;
         let to = msg.to;
-        if let Communicator::Vehicle(vehicle_id) = from {
-            if let Communicator::RSU(tls_id) = to {
-                while self.data.len() <= tls_id.0 {
-                    self.data.push(HashMap::new());
-                }
-                match self.data[tls_id.0].get(&vehicle_id) {
-                    Some(rec) => {
-                        if rec.time_send < time_send {
-                            self.data[tls_id.0].insert(
-                                vehicle_id,
-                                Record {
-                                    vehicle,
-                                    time_send,
-                                    time_arrive,
-                                },
-                            );
-                        }
-                    }
-                    None => {
-                        self.data[tls_id.0].insert(
+        if let Communicator::Vehicle(vehicle_id) = from
+            && let Communicator::RSU(tls_id) = to
+        {
+            while self.data.len() <= tls_id.to_usize() {
+                self.data.push(HashMap::new());
+            }
+            match self.data[tls_id.to_usize()].get(&vehicle_id) {
+                Some(rec) => {
+                    if rec.time_send < time_send {
+                        self.data[tls_id.to_usize()].insert(
                             vehicle_id,
                             Record {
                                 vehicle,
@@ -50,8 +41,16 @@ impl RSU {
                         );
                     }
                 }
-            } else {
-                unreachable!();
+                None => {
+                    self.data[tls_id.to_usize()].insert(
+                        vehicle_id,
+                        Record {
+                            vehicle,
+                            time_send,
+                            time_arrive,
+                        },
+                    );
+                }
             }
         } else {
             unreachable!();
@@ -64,8 +63,8 @@ impl RSU {
             Message::new(
                 channel,
                 ctx,
-                Communicator::RSU(TrafficLightID(tls_id)),
-                Communicator::Node(TrafficLightID(tls_id)),
+                Communicator::RSU(TrafficLightID::from_usize(tls_id)),
+                Communicator::Node(TrafficLightID::from_usize(tls_id)),
                 time,
             );
         }

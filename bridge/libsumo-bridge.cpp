@@ -34,8 +34,12 @@ inline Payload report_exception(const std::exception& e) {
     const char* damangled = demangle(typeid(e).name());
     if ((size_t)damangled == BRIDGE_MALLOC_FAILED)
         return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
-    else
-        return Payload{BRIDGE_SUMO_EXCEPTION, (void*)damangled, 0};
+
+    std::string message = std::string(damangled) + ": " + e.what();
+    free((void*)damangled);
+    char* payload = strdup(message.c_str());
+    if (payload == NULL) return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
+    return Payload{BRIDGE_SUMO_EXCEPTION, payload, 0};
 }
 
 Payload sumo_load(const char* cfg, const size_t threads, const char* statics,
@@ -331,6 +335,9 @@ Payload get_links() {
     } catch (const std::exception& e) {
         return report_exception(e);
     }
+    if (size == 0) {
+        return Payload{BRIDGE_SUCCESS, 0, 0};
+    }
     links = (Link*)malloc(size * sizeof(Link));
     if (links == NULL) return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
     for (size_t i = 0; i < size; i++) {
@@ -393,6 +400,9 @@ Payload get_phases() {
     } catch (const std::exception& e) {
         return report_exception(e);
     }
+    if (size == 0) {
+        return Payload{BRIDGE_SUCCESS, 0, 0};
+    }
     phases = (Phase*)malloc(sizeof(Phase) * size);
     if (phases == NULL) return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
     for (size_t i = 0; i < size; i++) {
@@ -404,7 +414,7 @@ Payload get_phases() {
         phases[i].next_indexs =
             (size_t*)malloc(sizeof(size_t) * phases[i].next_count);
         if (phases[i].trafficlight == NULL || phases[i].state == NULL ||
-            phases[i].next_indexs == NULL) {
+            (phases[i].next_count != 0 && phases[i].next_indexs == NULL)) {
             if (phases[i].trafficlight) free(phases[i].trafficlight);
             if (phases[i].state) free(phases[i].state);
             if (phases[i].next_indexs) free(phases[i].next_indexs);

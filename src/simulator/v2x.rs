@@ -1,17 +1,17 @@
 use pyo3::{Py, PyAny};
 use rand::{RngExt, rngs::ThreadRng};
 use rand_distr::{Distribution, Normal};
-
-use crate::conf::CONFIG;
-use crate::simluator::{net::TrafficLightID, net::VehicleID};
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
+
+use crate::conf::CONFIG;
+use crate::simulator::{VehicleID, net::TrafficLightID};
 
 pub struct Channel {
     queue: BinaryHeap<Reverse<Message>>,
     cloud_delay_generator: Normal<f32>,
     rng: ThreadRng,
-    package_cout: Vec<usize>,
+    package_count: Vec<usize>,
     package_total: usize,
     delay_total: usize,
     package_loss: usize,
@@ -23,7 +23,7 @@ impl Channel {
             queue: BinaryHeap::new(),
             cloud_delay_generator,
             rng: rand::rng(),
-            package_cout: Vec::new(),
+            package_count: Vec::new(),
             package_total: 0,
             delay_total: 0,
             package_loss: 0,
@@ -32,15 +32,15 @@ impl Channel {
     pub fn message_count(&self) -> usize {
         self.queue.len()
     }
-    pub fn latset_time(&self) -> Option<usize> {
+    pub fn latest_time(&self) -> Option<usize> {
         self.queue.peek().map(|mesg| mesg.0.time_arrive)
     }
     pub fn push(&mut self, mesg: Message) {
         if let Communicator::RSU(tls_id) = mesg.to {
-            while self.package_cout.len() <= tls_id.0 {
-                self.package_cout.push(0);
+            while self.package_count.len() <= tls_id.to_usize() {
+                self.package_count.push(0);
             }
-            self.package_cout[tls_id.0] += 1;
+            self.package_count[tls_id.to_usize()] += 1;
         }
         self.delay_total += mesg.time_arrive - mesg.time_send;
         self.package_total += 1;
@@ -50,10 +50,10 @@ impl Channel {
         match self.queue.pop() {
             Some(mesg) => {
                 if let Communicator::RSU(tls_id) = mesg.0.to {
-                    while self.package_cout.len() <= tls_id.0 {
-                        self.package_cout.push(0);
+                    while self.package_count.len() <= tls_id.to_usize() {
+                        self.package_count.push(0);
                     }
-                    self.package_cout[tls_id.0] -= 1;
+                    self.package_count[tls_id.to_usize()] -= 1;
                 }
                 Some(mesg.0)
             }
@@ -61,20 +61,28 @@ impl Channel {
         }
     }
     pub fn get_package_count(&self, tls_id: TrafficLightID) -> usize {
-        if self.package_cout.len() <= tls_id.0 {
+        if self.package_count.len() <= tls_id.to_usize() {
             0
         } else {
-            self.package_cout[tls_id.0]
+            self.package_count[tls_id.to_usize()]
         }
     }
     pub fn get_average_delay(&self) -> f64 {
-        (self.delay_total as f64) / (self.package_total as f64)
+        if self.package_total == 0 {
+            0.0
+        } else {
+            (self.delay_total as f64) / (self.package_total as f64)
+        }
     }
     pub fn loss_package(&mut self) {
         self.package_loss += 1;
     }
     pub fn get_package_loss(&self) -> f64 {
-        (self.package_loss as f64) / (self.package_total as f64 + self.package_loss as f64)
+        if self.package_total + self.package_loss == 0 {
+            0.0
+        } else {
+            (self.package_loss as f64) / (self.package_total as f64 + self.package_loss as f64)
+        }
     }
 }
 

@@ -10,17 +10,17 @@ class Node(trafficrs.NodeBase):
         #            print(f"Node {self.node_id} tick {time}")
         #            self.send_to_cloud("hello")
         if time == 0:
-            sign = "r" * len(self.net.get_trafficlight(self.node_id).links)
+            sign = "r" * len(self.net.get_trafficlight(self.id).links)
             self.set_signal(sign)
         return
 
     def on_message(self, time_send, time_receive, sender, content):
-        # print(f'Node {self.node_id} received message from {sender} send {time_send} received {time_receive}')
+#        print(f'Node {self.id} received message from {sender} send {time_send} received {time_receive}')
         return
 
     def on_create(self):
         print(
-            f"Node {self.node_id} created on {self.net.get_trafficlight(self.node_id).id}"
+            f"Node {self.id} created on {self.net.get_trafficlight(self.id).id}"
         )
         return
 

@@ -1,22 +1,19 @@
 mod conf;
-mod simluator;
+mod simulator;
 mod sumo;
 
 use clap::Parser;
 use conf::CONFIG;
 use log::{debug, error, info, warn};
-use pyo3::Python;
-use pyo3::types::PyModule;
-use rand_distr::Normal;
-use simluator::trafficrs;
+use pyo3::{Python, types::PyModule};
 use std::env;
 use std::ffi::CString;
 use std::path::PathBuf;
-use std::process::exit;
+use std::process::ExitCode;
 use std::time::Instant;
-use sumo::Sumo;
 
-use crate::simluator::Simluator;
+use simulator::{Simulator, trafficrs};
+use sumo::Sumo;
 
 #[derive(Parser)]
 #[command(name = env!("CARGO_PKG_NAME"))]
@@ -36,57 +33,72 @@ lazy_static::lazy_static! {
     pub static ref ARGS : Args = Args::parse();
 }
 
-fn main() {
+fn main() -> ExitCode {
     if env::var("RUST_LOG").is_err() {
         unsafe { env::set_var("RUST_LOG", "info") }
     }
     env_logger::init();
     debug!(
-        "Starting with config:\n{}",
+        "Resolved configuration:\n{}",
         toml::to_string(&*CONFIG).unwrap()
     );
 
     lazy_static::initialize(&CONFIG);
 
-    info!("Loading SUMO");
+    if !(CONFIG.cloud_package_loss_rate >= 0.0 && CONFIG.cloud_package_loss_rate < 1.0) {
+        error!(
+            "Invalid cloud packet loss rate: value={} must be in [0.0, 1.0)",
+            CONFIG.cloud_package_loss_rate
+        );
+        return ExitCode::FAILURE;
+    }
+
+    info!("Initializing SUMO");
 
     let pwd = match env::current_dir() {
         Ok(p) => p,
         Err(e) => {
-            error!("Can not get pwd: {}", e);
-            exit(1);
+            error!("Failed to determine the current working directory: {}", e);
+            return ExitCode::FAILURE;
         }
     };
     let cfg_dir = pwd.join(match ARGS.config.as_ref().unwrap().parent() {
         Some(p) => p,
         None => {
             error!(
-                "Can not get parent for {}",
+                "Configuration path has no parent directory: {}",
                 ARGS.config.clone().unwrap().display()
             );
-            exit(1);
+            return ExitCode::FAILURE;
         }
     });
 
     let output_dir = cfg_dir.join(&CONFIG.output_dir);
     if output_dir.exists() {
         if !output_dir.is_dir() {
-            error!("Output dir {} is not directory", output_dir.display());
-            exit(1);
+            error!("Output path is not a directory: {}", output_dir.display());
+            return ExitCode::FAILURE;
         } else {
-            warn!("Output dir already exists, pervious output may be covered");
+            warn!(
+                "Output directory already exists; previous simulation output may be overwritten: {}",
+                output_dir.display()
+            );
         }
     } else {
-        match std::fs::create_dir(&output_dir) {
+        match std::fs::create_dir_all(&output_dir) {
             Ok(_) => {}
             Err(e) => {
-                error!("Can not create output dir {}: {}", output_dir.display(), e);
-                exit(1);
+                error!(
+                    "Failed to create output directory {}: {}",
+                    output_dir.display(),
+                    e
+                );
+                return ExitCode::FAILURE;
             }
         }
     }
 
-    info!("Using output directory {}", output_dir.display());
+    info!("Using output directory: {}", output_dir.display());
 
     let sumocfg = cfg_dir.join(&CONFIG.sumo.sumocfg);
 
@@ -94,148 +106,183 @@ fn main() {
         Some(path) => {
             if path.is_dir() {
                 if let Err(e) = env::set_current_dir(path) {
-                    error!("Can not change dir to {}: {}", path.display(), e);
-                    exit(1);
+                    error!(
+                        "Failed to change working directory to {}: {}",
+                        path.display(),
+                        e
+                    );
+                    return ExitCode::FAILURE;
                 }
             } else {
-                error!("Sumocfg dir {} is not directory", path.display());
-                exit(1);
+                error!(
+                    "SUMO configuration directory is not a directory: {}",
+                    path.display()
+                );
+                return ExitCode::FAILURE;
             }
         }
         None => {
-            error!("Can not get parent for {}", sumocfg.display());
-            exit(1);
+            error!(
+                "SUMO configuration path has no parent directory: {}",
+                sumocfg.display()
+            );
+            return ExitCode::FAILURE;
         }
     }
 
     if !sumocfg.exists() || !sumocfg.is_file() {
-        error!("Can not open sumocfg file {}", sumocfg.display());
-        exit(1);
+        error!(
+            "SUMO configuration file does not exist or is not a regular file: {}",
+            sumocfg.display()
+        );
+        return ExitCode::FAILURE;
     }
 
     let sumo = match Sumo::load(&sumocfg, CONFIG.sumo.threads, &output_dir) {
         Ok(sumo) => sumo,
         Err(e) => {
-            error!("Init SUMO failed: {}", e);
-            exit(1);
+            error!("Failed to initialize SUMO: {}", e);
+            return ExitCode::FAILURE;
         }
     };
 
     if let Err(e) = env::set_current_dir(pwd.clone()) {
-        error!("Can not change dir back to {}: {}", pwd.display(), e);
-        exit(1);
+        error!(
+            "Failed to restore the working directory to {}: {}",
+            pwd.display(),
+            e
+        );
+        return ExitCode::FAILURE;
     }
 
-    info!("time_begin: {}ms", sumo.time_begin().unwrap());
-    info!("time_end: {}ms", sumo.time_end().unwrap());
-    info!("step_length: {}ms", sumo.step_length().unwrap());
-    info!("net-file: {}", sumo.net_file().unwrap());
-    info!("route-files: {}", sumo.route_files().unwrap());
+    info!(
+        "SUMO initialized: start={}ms, end={}ms, step={}ms, net_file={}, route_files={}",
+        sumo.time_begin().unwrap(),
+        sumo.time_end().unwrap(),
+        sumo.step_length().unwrap(),
+        sumo.net_file().unwrap(),
+        sumo.route_files().unwrap()
+    );
 
-    info!("Inited SUMO");
+    let mut simulator = match if !ARGS.baseline {
+        pyo3::append_to_inittab!(trafficrs);
+        Python::initialize();
 
-    pyo3::append_to_inittab!(trafficrs);
-    Python::initialize();
-
-    match Python::attach(|py| {
-        py.run(
-            pyo3::ffi::c_str!(
-                r#"
+        match Python::attach(|py| {
+            py.run(
+                pyo3::ffi::c_str!(
+                    r#"
 import trafficrs
 
 trafficrs.hello_world()
 "#
-            ),
-            None,
-            None,
-        )
-    }) {
-        Ok(_) => {}
-        Err(e) => {
-            error!("Test python bind failed: {}", e);
-            exit(1);
-        }
-    }
-
-    info!("Inited Python runtime");
-
-    let script = cfg_dir.join(&CONFIG.script);
-
-    if !script.exists() {
-        error!("Script file {} not exist", script.display());
-        exit(1);
-    }
-
-    if !script.is_file() {
-        error!("Script file {} is not regular file", script.display());
-        exit(1);
-    }
-
-    let source = match std::fs::read_to_string(&script) {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            error!("Script file {} can not read: {}", script.display(), e);
-            exit(1);
-        }
-    };
-    let source = match CString::new(source) {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            error!("Can not decode script file {}: {}", script.display(), e);
-            exit(1);
-        }
-    };
-
-    let module = Python::attach(|py| {
-        match PyModule::from_code(
-            py,
-            &source,
-            pyo3::ffi::c_str!("plugin.py"),
-            pyo3::ffi::c_str!("plugin"),
-        ) {
-            Ok(r) => r,
+                ),
+                None,
+                None,
+            )
+        }) {
+            Ok(_) => {}
             Err(e) => {
-                error!("Load script failed: {}", e);
-                exit(1);
+                error!("Python binding self-test failed: {}", e);
+                return ExitCode::FAILURE;
             }
         }
-        .unbind()
-    });
 
-    if ARGS.baseline {
-        info!("Using baseline mode");
-    }
+        info!("Python runtime initialized");
+        let script = cfg_dir.join(&CONFIG.script);
 
-    let cloud_delay_generator = Normal::new(
-        CONFIG.cloud_delay_mean as f32,
-        CONFIG.cloud_delay_std_dev as f32,
-    )
-    .unwrap();
-    let mut simluator = Simluator::init(sumo, cloud_delay_generator, module, ARGS.baseline);
-    info!("Inited Simluator");
+        if !script.exists() {
+            error!("Plugin script does not exist: {}", script.display());
+            return ExitCode::FAILURE;
+        }
+
+        if !script.is_file() {
+            error!("Plugin script is not a regular file: {}", script.display());
+            return ExitCode::FAILURE;
+        }
+
+        let source = match std::fs::read_to_string(&script) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                error!("Failed to read plugin script {}: {}", script.display(), e);
+                return ExitCode::FAILURE;
+            }
+        };
+        let source = match CString::new(source) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                error!(
+                    "Plugin script contains a null byte {}: {}",
+                    script.display(),
+                    e
+                );
+                return ExitCode::FAILURE;
+            }
+        };
+
+        let module = match Python::attach(|py| {
+            PyModule::from_code(
+                py,
+                &source,
+                pyo3::ffi::c_str!("plugin.py"),
+                pyo3::ffi::c_str!("plugin"),
+            )
+            .map(|m| m.unbind())
+        }) {
+            Ok(r) => r,
+            Err(e) => {
+                error!("Failed to load plugin script {}: {}", script.display(), e);
+                return ExitCode::FAILURE;
+            }
+        };
+
+        Simulator::init(sumo, Some(module), false)
+    } else {
+        info!("Running in baseline mode without the V2X plugin");
+        Simulator::init(sumo, None, true)
+    } {
+        Ok(sim) => sim,
+        Err(e) => {
+            error!("Failed to initialize the simulation: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    info!("Simulation initialized");
 
     let global_start = Instant::now();
-    while !simluator.is_end() {
-        simluator.tick().unwrap();
-        if simluator.step_current.is_multiple_of(CONFIG.log_interval) {
+    while !simulator.is_end() {
+        if let Err(e) = simulator.tick() {
+            error!("Simulation step failed: {}", e);
+            break;
+        }
+        if simulator.step_current.is_multiple_of(CONFIG.log_interval) {
             let end = global_start.elapsed();
-            let simluation_elapsed = simluator.step_current * simluator.step;
+            let simluation_elapsed = simulator.step_current * simulator.step;
             info!(
-                "setp: {} simulation time: {}ms cost: {}ms procress: {:.2}% rate:{:.2}x",
-                simluator.step_current,
-                simluator.time_begin + simluation_elapsed,
+                "Progress: step={}, simulation_time={}ms, elapsed={}ms, complete={:.2}%, speed={:.2}x",
+                simulator.step_current,
+                simulator.time_begin + simluation_elapsed,
                 end.as_millis(),
                 ((simluation_elapsed * 100) as f64)
-                    / ((simluator.time_end - simluator.time_begin) as f64),
+                    / ((simulator.time_end - simulator.time_begin) as f64),
                 (simluation_elapsed as f64) / (end.as_millis() as f64)
             );
-            let (delay, loss) = simluator.v2x_stats();
-            info!(
-                "V2X average delay: {:.2} ms, package loss rate {:.2}%",
-                delay,
-                loss * 100.0
-            );
+            if !ARGS.baseline {
+                let (delay, loss) = simulator.v2x_stats();
+                info!(
+                    "V2X statistics: average_delay={:.2}ms, packet_loss={:.2}%",
+                    delay,
+                    loss * 100.0
+                );
+            }
         }
     }
-    info!("Simluate ended");
+    if simulator.is_end() {
+        info!("Simulation completed successfully");
+        ExitCode::SUCCESS
+    } else {
+        error!("Simulation terminated before reaching the configured end time");
+        ExitCode::FAILURE
+    }
 }

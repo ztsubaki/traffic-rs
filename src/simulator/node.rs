@@ -1,8 +1,8 @@
 use pyo3::{Py, PyAny, Python, pyclass, pymethods, types::PyAnyMethods};
 
-use crate::simluator::{
+use crate::simulator::{
     PyNet,
-    net::Signals,
+    net::{Signals, TrafficLightID},
     v2x::{Channel, Communicator, Message},
 };
 
@@ -11,28 +11,40 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new(obj: Py<PyAny>) -> Self {
-        Node { obj }
+    pub fn init(id: TrafficLightID, net: PyNet, class: &Py<PyAny>) -> Result<Self, String> {
+        let obj = match Python::attach(|py| class.call1(py, (id, net))) {
+            Ok(obj) => obj,
+            Err(e) => return Err(format!("Failed to initialize Python Node: {}", e)),
+        };
+        Ok(Node { obj })
     }
-    pub fn on_tick(&mut self, time: usize, v2x: &mut Channel) -> Option<Signals> {
-        Python::attach(|py| {
+    pub fn on_tick(&mut self, time: usize, v2x: &mut Channel) -> Result<Option<Signals>, String> {
+        if let Err(e) = Python::attach(|py| {
             self.obj
                 .bind(py)
                 .call_method1("on_tick", (time,))
                 .map(|_| {})
-        })
-        .unwrap();
-        self.post_hook(time, v2x)
+        }) {
+            return Err(format!("Python Node on_tick callback failed: {}", e));
+        }
+        Ok(self.post_hook(time, v2x))
     }
-    pub fn on_message(&mut self, msg: Message, v2x: &mut Channel) -> Option<Signals> {
+    pub fn on_message(
+        &mut self,
+        msg: Message,
+        v2x: &mut Channel,
+    ) -> Result<Option<Signals>, String> {
         let from = match msg.from {
             Communicator::Cloud => None,
-            Communicator::RSU(tls_id) => Some(tls_id.0),
+            Communicator::RSU(tls_id) => Some(tls_id),
             _ => {
-                return None;
+                return Err(
+                    "Node received a message from an unsupported sender; expected Cloud or RSU"
+                        .to_string(),
+                );
             }
         };
-        Python::attach(|py| {
+        if let Err(e) = Python::attach(|py| {
             self.obj
                 .bind(py)
                 .call_method1(
@@ -40,13 +52,17 @@ impl Node {
                     (msg.time_send, msg.time_arrive, from, msg.content),
                 )
                 .map(|_| {})
-        })
-        .unwrap();
-        self.post_hook(msg.time_arrive, v2x)
+        }) {
+            return Err(format!("Python Node on_message callback failed: {}", e));
+        }
+        Ok(self.post_hook(msg.time_arrive, v2x))
     }
-    pub fn on_create(&mut self, v2x: &mut Channel) -> Option<Signals> {
-        Python::attach(|py| self.obj.bind(py).call_method0("on_create").map(|_| {})).unwrap();
-        self.post_hook(0, v2x)
+    pub fn on_create(&mut self) -> Result<(), String> {
+        if let Err(e) = Python::attach(|py| self.obj.bind(py).call_method0("on_create").map(|_| {}))
+        {
+            return Err(format!("Python Node on_create callback failed: {}", e));
+        }
+        Ok(())
     }
     fn post_hook(&mut self, time: usize, v2x: &mut Channel) -> Option<Signals> {
         Python::attach(|py| {
@@ -62,7 +78,7 @@ impl Node {
 #[pyclass(subclass)]
 pub struct NodeBase {
     #[pyo3(get)]
-    node_id: usize,
+    id: TrafficLightID,
     #[pyo3(get)]
     net: Py<PyNet>,
     messages: Vec<Message>,
@@ -72,9 +88,9 @@ pub struct NodeBase {
 #[pymethods]
 impl NodeBase {
     #[new]
-    fn new(id: usize, net: Py<PyNet>) -> Self {
+    fn new(id: TrafficLightID, net: Py<PyNet>) -> Self {
         NodeBase {
-            node_id: id,
+            id,
             net,
             messages: Vec::new(),
             action: None,
@@ -89,7 +105,7 @@ impl NodeBase {
         &self,
         _time_send: usize,
         _time_receive: usize,
-        _from: Option<usize>,
+        _from: Option<TrafficLightID>,
         _content: Py<PyAny>,
     ) {
         panic!("on_message for Node not override");
@@ -101,7 +117,7 @@ impl NodeBase {
 
     fn send_to_cloud(&mut self, content: Py<PyAny>) {
         self.messages.push(Message {
-            from: Communicator::Node(super::net::TrafficLightID(self.node_id)),
+            from: Communicator::Node(self.id),
             to: Communicator::Cloud,
             content,
             time_send: 0,
@@ -113,7 +129,7 @@ impl NodeBase {
         self.action = match Signals::from_str(&signals) {
             Ok(sig) => Some(sig),
             Err(e) => {
-                log::warn!("Can not resolve signals: {}", e);
+                log::warn!("Rejected invalid traffic signal state: {}", e);
                 return;
             }
         };

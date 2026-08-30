@@ -1,34 +1,46 @@
 use pyo3::{Py, PyAny, Python, pyclass, pymethods, types::PyAnyMethods};
 
-use crate::simluator::PyNet;
-use crate::simluator::v2x::{Channel, Communicator, Message};
+use crate::simulator::{
+    PyNet,
+    net::TrafficLightID,
+    v2x::{Channel, Communicator, Message},
+};
 
 pub struct Cloud {
     obj: Py<PyAny>,
 }
 
 impl Cloud {
-    pub fn new(obj: Py<PyAny>) -> Self {
-        Cloud { obj }
+    pub fn init(net: PyNet, class: &Py<PyAny>) -> Result<Self, String> {
+        let obj = match Python::attach(|py| class.call1(py, (net,))) {
+            Ok(obj) => obj,
+            Err(e) => return Err(format!("Failed to initialize Python Cloud: {}", e)),
+        };
+        Ok(Cloud { obj })
     }
-    pub fn on_tick(&mut self, time: usize, v2x: &mut Channel) {
-        Python::attach(|py| {
+    pub fn on_tick(&mut self, time: usize, v2x: &mut Channel) -> Result<(), String> {
+        if let Err(e) = Python::attach(|py| {
             self.obj
                 .bind(py)
                 .call_method1("on_tick", (time,))
                 .map(|_| {})
-        })
-        .unwrap();
+        }) {
+            return Err(format!("Python Cloud on_tick callback failed: {}", e));
+        }
         self.post_hook(time, v2x);
+        Ok(())
     }
-    pub fn on_message(&mut self, msg: Message, v2x: &mut Channel) {
+    pub fn on_message(&mut self, msg: Message, v2x: &mut Channel) -> Result<(), String> {
         let from = match msg.from {
-            Communicator::Node(tls_id) => Some(tls_id.0),
+            Communicator::Node(tls_id) => Some(tls_id.to_usize()),
             _ => {
-                return;
+                return Err(
+                    "Cloud received a message from an unsupported sender; expected Node"
+                        .to_string(),
+                );
             }
         };
-        Python::attach(|py| {
+        if let Err(e) = Python::attach(|py| {
             self.obj
                 .bind(py)
                 .call_method1(
@@ -36,13 +48,18 @@ impl Cloud {
                     (msg.time_send, msg.time_arrive, from, msg.content),
                 )
                 .map(|_| {})
-        })
-        .unwrap();
+        }) {
+            return Err(format!("Python Cloud on_message callback failed: {}", e));
+        }
         self.post_hook(msg.time_arrive, v2x);
+        Ok(())
     }
-    pub fn on_create(&mut self, v2x: &mut Channel) {
-        Python::attach(|py| self.obj.bind(py).call_method0("on_create").map(|_| {})).unwrap();
-        self.post_hook(0, v2x);
+    pub fn on_create(&mut self) -> Result<(), String> {
+        if let Err(e) = Python::attach(|py| self.obj.bind(py).call_method0("on_create").map(|_| {}))
+        {
+            return Err(format!("Python Cloud on_create callback failed: {}", e));
+        }
+        Ok(())
     }
     fn post_hook(&mut self, time: usize, v2x: &mut Channel) {
         for message in Python::attach(|py| {
@@ -60,9 +77,9 @@ impl Cloud {
 
 #[pyclass(subclass)]
 pub struct CloudBase {
-    messages: Vec<Message>,
     #[pyo3(get)]
     net: Py<PyNet>,
+    messages: Vec<Message>,
 }
 
 #[pymethods]
@@ -83,16 +100,16 @@ impl CloudBase {
         &self,
         _time_send: usize,
         _time_receive: usize,
-        _from: Option<usize>,
+        _from: Option<TrafficLightID>,
         _content: Py<PyAny>,
     ) {
         panic!("on_message for Node not override");
     }
 
-    fn send_to_node(&mut self, node_id: usize, content: Py<PyAny>) {
+    fn send_to_node(&mut self, node_id: TrafficLightID, content: Py<PyAny>) {
         self.messages.push(Message {
             from: Communicator::Cloud,
-            to: Communicator::Node(super::net::TrafficLightID(node_id)),
+            to: Communicator::Node(node_id),
             content,
             time_send: 0,
             time_arrive: 0,

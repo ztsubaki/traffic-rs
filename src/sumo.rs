@@ -11,7 +11,7 @@ pub struct Sumo {
 impl Drop for Sumo {
     fn drop(&mut self) {
         if let Err(e) = self.close() {
-            log::warn!("Err {} reported when closing SUMO", e);
+            log::warn!("SUMO reported an error while closing: {}", e);
         }
     }
 }
@@ -211,7 +211,7 @@ const BRIDGE_MALLOC_FAILED: usize = 2;
 impl Sumo {
     pub fn load(sumocfg: &Path, thread: usize, output: &Path) -> Result<Sumo, String> {
         if thread < 1 {
-            return Err("Sumo threads must no less than 1".to_string());
+            return Err("SUMO thread count must be at least 1".to_string());
         }
         let statics = output.join("./statics.xml");
         let tripinfo = output.join("./tripinfo.xml");
@@ -242,29 +242,28 @@ impl Sumo {
     pub fn step_length(&self) -> Result<usize, String> {
         self.get_option("step-length")?
             .parse::<f64>()
-            .map_or(
-                Err("Parse error".to_string()),
-                |f| Ok((f * 1000.0) as usize),
-            )
+            .map_or(Err("Failed to parse SUMO step length".to_string()), |f| {
+                Ok((f * 1000.0) as usize)
+            })
     }
     pub fn time_begin(&self) -> Result<usize, String> {
         self.get_option("begin")?
             .parse::<f64>()
-            .map_or(
-                Err("Parse error".to_string()),
-                |f| Ok((f * 1000.0) as usize),
-            )
+            .map_or(Err("Failed to parse SUMO start time".to_string()), |f| {
+                Ok((f * 1000.0) as usize)
+            })
     }
     pub fn time_end(&self) -> Result<usize, String> {
-        self.get_option("end")?
-            .parse::<f64>()
-            .map_or(Err("Parse error".to_string()), |f| {
+        self.get_option("end")?.parse::<f64>().map_or(
+            Err("Failed to parse SUMO end time".to_string()),
+            |f| {
                 Ok(if f < 0.0 {
                     usize::MAX
                 } else {
                     (f * 1000.0) as usize
                 })
-            })
+            },
+        )
     }
     pub fn net_file(&self) -> Result<String, String> {
         self.get_option("net-file")
@@ -315,7 +314,7 @@ impl Sumo {
                     libc::free(payload);
                 }
                 if r.is_empty() {
-                    Err("No such key".to_string())
+                    Err("SUMO parameter was not found".to_string())
                 } else {
                     Ok(r)
                 }
@@ -335,7 +334,7 @@ impl Sumo {
                     libc::free(payload);
                 }
                 if r.is_empty() {
-                    Err("No such key".to_string())
+                    Err("SUMO option was not found".to_string())
                 } else {
                     Ok(r)
                 }
@@ -356,7 +355,7 @@ impl Sumo {
 fn resolve_c_result_no_paylod(value: Payload) -> Result<(), String> {
     match value.status {
         BRIDGE_SUCCESS => Ok(()),
-        BRIDGE_MALLOC_FAILED => Err("Bridge malloc failed".to_string()),
+        BRIDGE_MALLOC_FAILED => Err("SUMO bridge memory allocation failed".to_string()),
         BRIDGE_SUMO_EXCEPTION => {
             let mut e: String = unsafe { CStr::from_ptr(value.payload as *const i8) }
                 .to_string_lossy()
@@ -365,14 +364,14 @@ fn resolve_c_result_no_paylod(value: Payload) -> Result<(), String> {
             e.insert_str(0, "SUMO exception: ");
             Err(e)
         }
-        _ => Err("Unknow bridge status".to_string()),
+        _ => Err("SUMO bridge returned an unknown status".to_string()),
     }
 }
 
 fn resolve_c_result_with_payload(value: Payload) -> Result<*mut c_void, String> {
     match value.status {
         BRIDGE_SUCCESS => Ok(value.payload),
-        BRIDGE_MALLOC_FAILED => Err("Bridge malloc failed".to_string()),
+        BRIDGE_MALLOC_FAILED => Err("SUMO bridge memory allocation failed".to_string()),
         BRIDGE_SUMO_EXCEPTION => {
             let mut e: String = unsafe { CStr::from_ptr(value.payload as *const i8) }
                 .to_string_lossy()
@@ -381,7 +380,7 @@ fn resolve_c_result_with_payload(value: Payload) -> Result<*mut c_void, String> 
             e.insert_str(0, "SUMO exception: ");
             Err(e)
         }
-        _ => Err("Unknow bridge status".to_string()),
+        _ => Err("SUMO bridge returned an unknown status".to_string()),
     }
 }
 
@@ -391,7 +390,7 @@ fn resolve_c_result_with_vec_payload<T>(value: Payload) -> Result<CVec<T>, Strin
             ptr: value.payload as *mut T,
             len: value.len,
         }),
-        BRIDGE_MALLOC_FAILED => Err("Bridge malloc failed".to_string()),
+        BRIDGE_MALLOC_FAILED => Err("SUMO bridge memory allocation failed".to_string()),
         BRIDGE_SUMO_EXCEPTION => {
             let mut e: String = unsafe { CStr::from_ptr(value.payload as *const i8) }
                 .to_string_lossy()
@@ -400,6 +399,6 @@ fn resolve_c_result_with_vec_payload<T>(value: Payload) -> Result<CVec<T>, Strin
             e.insert_str(0, "SUMO exception: ");
             Err(e)
         }
-        _ => Err("Unknow bridge status".to_string()),
+        _ => Err("SUMO bridge returned an unknown status".to_string()),
     }
 }

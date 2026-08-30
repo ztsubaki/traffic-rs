@@ -1,12 +1,10 @@
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
+use std::process::exit;
 use std::str::FromStr;
-use std::{
-    fs,
-    io::{self, Read, Write},
-    process::exit,
-};
 
 use crate::ARGS;
 
@@ -62,7 +60,11 @@ fn get_conf() -> Config {
             let file = match fs::File::open(path) {
                 Ok(f) => f,
                 Err(e) => {
-                    log::error!("Connot open config file: {}", e);
+                    log::error!(
+                        "Failed to open configuration file {}: {}",
+                        path.display(),
+                        e
+                    );
                     exit(1);
                 }
             };
@@ -71,41 +73,52 @@ fn get_conf() -> Config {
             match file_limited.read_to_end(&mut buffer) {
                 Ok(_) => {}
                 Err(e) => {
-                    log::error!("Can not read config: {}", e);
+                    log::error!(
+                        "Failed to read configuration file {}: {}",
+                        path.display(),
+                        e
+                    );
                     exit(1);
                 }
             };
             if buffer.len() > 10240 {
-                log::error!("Config file size more than 10KB, is it right?");
+                log::error!(
+                    "Configuration file exceeds the 10 KiB size limit: {}",
+                    path.display()
+                );
                 exit(1);
             }
             match String::from_utf8(buffer) {
                 Ok(str) => match toml::from_str(&str) {
                     Ok(config) => config,
                     Err(e) => {
-                        log::error!("Prase config file error: {}", e);
+                        log::error!(
+                            "Failed to parse configuration file {}: {}",
+                            path.display(),
+                            e
+                        );
                         exit(1);
                     }
                 },
                 Err(_) => {
-                    log::error!("Config file is not UTF-8!");
+                    log::error!("Configuration file is not valid UTF-8: {}", path.display());
                     exit(1);
                 }
             }
         }
         None => {
-            log::warn!("No config file provided, try to create default config");
+            log::warn!("No configuration file was provided; creating a default configuration");
             let mut file = match fs::File::create_new("conf.toml") {
                 Ok(f) => f,
                 Err(e) => {
                     match e.kind() {
                         io::ErrorKind::AlreadyExists => {
                             log::error!(
-                                "Try to create default config but file already exists, did you forget \"-c conf.toml\" ?"
+                                "Default configuration file already exists; specify it with --config conf.toml"
                             );
                         }
                         _ => {
-                            log::error!("Can not create config file");
+                            log::error!("Failed to create the default configuration file: {}", e);
                         }
                     };
                     exit(1);
@@ -116,7 +129,7 @@ fn get_conf() -> Config {
                     exit(0);
                 }
                 Err(e) => {
-                    log::error!("Can not write to config: {}", e);
+                    log::error!("Failed to write the default configuration file: {}", e);
                     exit(1);
                 }
             };
