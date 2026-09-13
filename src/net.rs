@@ -37,7 +37,49 @@ impl Net {
             num_phases: 0,
         }
     }
-    pub fn insert_junction(&mut self, junction: &sumo::Junction) -> Result<JunctionID, String> {
+    pub fn init(&mut self, sumo: &sumo::Sumo) -> Result<(), String> {
+        let edges = sumo.get_edges()?;
+        let junctions = sumo.get_junctions()?;
+        for junction in junctions.as_slice() {
+            self.insert_junction(junction)?;
+        }
+        log::info!(
+            "Loaded road network junctions: {}",
+            self.get_num_junctions()
+        );
+        for edge in edges.as_slice() {
+            self.insert_edge(edge)?;
+        }
+        log::info!("Loaded road network edges: {}", self.get_num_edges());
+        let lanes = sumo.get_lanes()?;
+        for lane in lanes.as_slice() {
+            self.insert_lane(lane)?;
+        }
+        log::info!("Loaded road network lanes: {}", self.get_num_lanes());
+        let trafficlights = sumo.get_trafficlights()?;
+        for trafficlight in trafficlights.as_slice() {
+            self.insert_trafficlight(trafficlight)?;
+        }
+        let tls_count = self.get_num_trafficlights();
+        log::info!("Loaded traffic lights: {}", tls_count);
+        let links = sumo.get_links()?;
+        for link in links.as_slice() {
+            self.insert_link(link)?;
+        }
+        log::info!(
+            "Loaded road network links: total={}, signal_controlled={}",
+            self.get_num_links().0,
+            self.get_num_links().1
+        );
+        let phases = sumo.get_phases()?;
+        for phase in phases.as_slice() {
+            self.insert_phase(phase)?;
+        }
+        log::info!("Loaded traffic signal phases: {}", self.get_num_phases());
+        self.check()?;
+        Ok(())
+    }
+    fn insert_junction(&mut self, junction: &sumo::Junction) -> Result<JunctionID, String> {
         let junction_id = unsafe { CStr::from_ptr(junction.id) };
         if junction_id.is_empty() {
             return Err("Cannot insert a junction with an empty ID".to_string());
@@ -56,7 +98,7 @@ impl Net {
             .insert(junction_id.to_owned(), jid)
             .map_or_else(|| Ok(jid), |_| unreachable!())
     }
-    pub fn insert_edge(&mut self, edge: &sumo::Edge) -> Result<EdgeID, String> {
+    fn insert_edge(&mut self, edge: &sumo::Edge) -> Result<EdgeID, String> {
         let edge_id = unsafe { CStr::from_ptr(edge.id) };
         let edge_name = unsafe { CStr::from_ptr(edge.name) };
         let from_junction_id = unsafe { CStr::from_ptr(edge.from) };
@@ -93,7 +135,7 @@ impl Net {
             .insert(edge_id.to_owned(), eid)
             .map_or_else(|| Ok(eid), |_| unreachable!())
     }
-    pub fn insert_lane(&mut self, lane: &sumo::Lane) -> Result<LaneID, String> {
+    fn insert_lane(&mut self, lane: &sumo::Lane) -> Result<LaneID, String> {
         let lane_id = unsafe { CStr::from_ptr(lane.id) };
         let edge_id = unsafe { CStr::from_ptr(lane.edge_id) };
         let edge = self.get_edge_id(edge_id);
@@ -121,7 +163,7 @@ impl Net {
             .insert(lane_id.to_owned(), lid)
             .map_or_else(|| Ok(lid), |_| unreachable!())
     }
-    pub fn insert_trafficlight(
+    fn insert_trafficlight(
         &mut self,
         trafficlight: &sumo::TrafficLight,
     ) -> Result<TrafficLightID, String> {
@@ -145,7 +187,7 @@ impl Net {
             .insert(trafficlight_id.to_owned(), tid)
             .map_or_else(|| Ok(tid), |_| unreachable!())
     }
-    pub fn insert_link(&mut self, link: &sumo::Link) -> Result<(), String> {
+    fn insert_link(&mut self, link: &sumo::Link) -> Result<(), String> {
         let trafficlight_id = unsafe { CStr::from_ptr(link.trafficlight) };
         let from_id = unsafe { CStr::from_ptr(link.from_lane) };
         let from = self.get_lane_id(from_id);
@@ -207,7 +249,7 @@ impl Net {
         }
         Ok(())
     }
-    pub fn insert_phase(&mut self, phase: &sumo::Phase) -> Result<(), String> {
+    fn insert_phase(&mut self, phase: &sumo::Phase) -> Result<(), String> {
         let trafficlight_id = unsafe { CStr::from_ptr(phase.trafficlight) };
         if trafficlight_id.is_empty() {
             return Err("Phase references an empty traffic light ID".to_string());
@@ -261,7 +303,7 @@ impl Net {
         self.num_phases += 1;
         Ok(())
     }
-    pub fn check(&self) -> Result<(), String> {
+    fn check(&self) -> Result<(), String> {
         for tls in &self.trafficlights {
             for program in &tls.phases {
                 for phase in program {

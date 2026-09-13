@@ -1,5 +1,4 @@
 mod cloud;
-mod net;
 mod node;
 mod rsu;
 mod v2x;
@@ -12,9 +11,15 @@ use pyo3::{
     wrap_pyfunction,
 };
 use rand_distr::Normal;
-use std::{collections::HashMap, ffi::CStr, ffi::CString, str::FromStr, sync::Arc};
+use std::{
+    collections::HashMap,
+    ffi::{CStr, CString},
+    str::FromStr,
+    sync::{Arc, Mutex},
+};
 
-use crate::simulator::net::{
+use crate::net::Net;
+use crate::net::{
     Edge, EdgeID, Junction, JunctionID, Lane, LaneID, Signals, TrafficLight, TrafficLightID,
 };
 use crate::sumo;
@@ -27,13 +32,12 @@ use crate::{
         v2x::Communicator,
     },
 };
-use net::Net;
 use node::NodeBase;
 use rsu::RSU;
 use v2x::{Channel, Message};
 
 pub struct Simulator {
-    sumo: Sumo,
+    sumo: Mutex<Sumo>,
     net: Arc<Net>,
     rsu: Option<RSU>,
     v2x: Option<Channel>,
@@ -52,55 +56,13 @@ impl Simulator {
     pub fn init(
         sumo: Sumo,
         module: Option<Py<PyModule>>,
-        baseline: bool,
+        net: Arc<Net>,
     ) -> Result<Simulator, String> {
         let time_begin = sumo.time_begin()?;
         let time_end = sumo.time_end()?;
         let step = sumo.step_length()?;
         let edges = sumo.get_edges()?;
-        let mut net = Net::new();
-        let junctions = sumo.get_junctions()?;
-        for junction in junctions.as_slice() {
-            net.insert_junction(junction)?;
-        }
-        log::info!("Loaded road network junctions: {}", net.get_num_junctions());
-        for edge in edges.as_slice() {
-            net.insert_edge(edge)?;
-        }
-        log::info!("Loaded road network edges: {}", net.get_num_edges());
-        let lanes = sumo.get_lanes()?;
-        for lane in lanes.as_slice() {
-            net.insert_lane(lane)?;
-        }
-        log::info!("Loaded road network lanes: {}", net.get_num_lanes());
-        let trafficlights = sumo.get_trafficlights()?;
-        for trafficlight in trafficlights.as_slice() {
-            net.insert_trafficlight(trafficlight)?;
-        }
-        let tls_count = net.get_num_trafficlights();
-        log::info!("Loaded traffic lights: {}", tls_count);
-        let links = sumo.get_links()?;
-        for link in links.as_slice() {
-            net.insert_link(link)?;
-        }
-        log::info!(
-            "Loaded road network links: total={}, signal_controlled={}",
-            net.get_num_links().0,
-            net.get_num_links().1
-        );
-        let phases = sumo.get_phases()?;
-        for phase in phases.as_slice() {
-            net.insert_phase(phase)?;
-        }
-        log::info!("Loaded traffic signal phases: {}", net.get_num_phases());
-        match net.check() {
-            Ok(_) => {}
-            Err(e) => {
-                return Err(format!("Road network validation failed: {}", e));
-            }
-        }
-        let net = Arc::new(net);
-        if !baseline {
+        if let Some(module) = module {
             let v2x = v2x::Channel::new(
                 match Normal::new(
                     CONFIG.cloud_delay_mean as f32,
@@ -116,13 +78,13 @@ impl Simulator {
                 },
             );
             let mut nodes = Vec::<Node>::new();
-            let node_class = match Python::attach(|py| module.as_ref().unwrap().getattr(py, "Node"))
-            {
+            let node_class = match Python::attach(|py| module.as_ref().getattr(py, "Node")) {
                 Ok(r) => r,
                 Err(e) => {
                     return Err(format!("Failed to access the Python Node class: {}", e));
                 }
             };
+            let tls_count = net.get_num_trafficlights();
             for id in 0..tls_count {
                 let mut node = Node::init(
                     TrafficLightID::from_usize(id),
@@ -132,17 +94,16 @@ impl Simulator {
                 node.on_create()?;
                 nodes.push(node);
             }
-            let cloud_class =
-                match Python::attach(|py| module.as_ref().unwrap().getattr(py, "Cloud")) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        return Err(format!("Failed to access the Python Cloud class: {}", e));
-                    }
-                };
+            let cloud_class = match Python::attach(|py| module.as_ref().getattr(py, "Cloud")) {
+                Ok(r) => r,
+                Err(e) => {
+                    return Err(format!("Failed to access the Python Cloud class: {}", e));
+                }
+            };
             let mut cloud = Cloud::init(PyNet::new(Arc::clone(&net)), &cloud_class)?;
             cloud.on_create()?;
             Ok(Simulator {
-                sumo,
+                sumo: Mutex::new(sumo),
                 net,
                 rsu: Some(RSU::new()),
                 v2x: Some(v2x),
@@ -154,11 +115,11 @@ impl Simulator {
                 cloud: Some(cloud),
                 vehicles: Vec::new(),
                 vehicle_ids: HashMap::new(),
-                baseline,
+                baseline: false,
             })
         } else {
             Ok(Simulator {
-                sumo,
+                sumo: Mutex::new(sumo),
                 net,
                 rsu: None,
                 v2x: None,
@@ -170,7 +131,7 @@ impl Simulator {
                 cloud: None,
                 vehicles: Vec::new(),
                 vehicle_ids: HashMap::new(),
-                baseline,
+                baseline: true,
             })
         }
     }
@@ -248,7 +209,13 @@ impl Simulator {
             return Err(String::from_str("Simulation has already ended").unwrap());
         }
         let time = self.time_begin + self.step_current * self.step;
-        let vehicles = self.sumo.get_vehicles()?;
+        let vehicles = match self.sumo.lock() {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(e.to_string());
+            }
+        }
+        .get_vehicles()?;
         trace!("Collected active vehicles: {}", vehicles.as_slice().len());
         if !self.baseline {
             for veh in vehicles.as_slice() {
@@ -312,7 +279,13 @@ impl Simulator {
                 let _ = self.update_vehicle(veh)?;
             }
         }
-        self.sumo.step()?;
+        let vehicles = match self.sumo.lock() {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(e.to_string());
+            }
+        }
+        .step()?;
         self.step_current += 1;
         Ok(())
     }
@@ -366,10 +339,11 @@ impl Simulator {
     }
 
     fn set_trafficlights(&self, sig: &Signals, trafficlight_id: TrafficLightID) {
+        let sumo = self.sumo.lock().unwrap();
         if let Some(tls) = self.net.get_trafficlight(trafficlight_id) {
             let sig = sig.to_str();
             if sig.len() == tls.links.len() {
-                if let Err(e) = self.sumo.set_trafficlight(&tls.id, &sig) {
+                if let Err(e) = sumo.set_trafficlight(&tls.id, &sig) {
                     log::warn!(
                         "Failed to set traffic light {} to state {}: {}",
                         tls.id,

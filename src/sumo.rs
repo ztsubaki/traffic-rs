@@ -1,11 +1,11 @@
+use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_double, c_void};
 use std::marker::PhantomData;
 use std::path::Path;
-use std::rc::Rc;
 use std::str::FromStr;
 
 pub struct Sumo {
-    _not_thread_safe: PhantomData<Rc<()>>,
+    _not_thread_sync: PhantomData<Cell<()>>,
 }
 
 impl Drop for Sumo {
@@ -235,7 +235,7 @@ impl Sumo {
         }) {
             Err(e) => Err(e),
             Ok(()) => Ok(Sumo {
-                _not_thread_safe: PhantomData,
+                _not_thread_sync: PhantomData,
             }),
         }
     }

@@ -1,19 +1,24 @@
 mod conf;
+mod net;
 mod simulator;
 mod sumo;
 
+use axum::{Router, routing};
 use clap::Parser;
 use conf::CONFIG;
 use log::{debug, error, info, warn};
 use pyo3::{Python, types::PyModule};
-use std::env;
 use std::ffi::CString;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Instant;
+use std::{env, thread};
 
 use simulator::{Simulator, trafficrs};
 use sumo::Sumo;
+
+use crate::net::Net;
 
 #[derive(Parser)]
 #[command(name = env!("CARGO_PKG_NAME"))]
@@ -137,7 +142,6 @@ fn main() -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
-
     let sumo = match Sumo::load(&sumocfg, CONFIG.sumo.threads, &output_dir) {
         Ok(sumo) => sumo,
         Err(e) => {
@@ -145,7 +149,13 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let mut net = Net::new();
+    if let Err(e) = net.init(&sumo) {
+        error!("Failed to initialize road network: {}", e);
+        return ExitCode::FAILURE;
+    }
 
+    let net = Arc::new(net);
     if let Err(e) = env::set_current_dir(pwd.clone()) {
         error!(
             "Failed to restore the working directory to {}: {}",
@@ -164,7 +174,7 @@ fn main() -> ExitCode {
         sumo.route_files().unwrap()
     );
 
-    let mut simulator = match if !ARGS.baseline {
+    let simulator = match if !ARGS.baseline {
         pyo3::append_to_inittab!(trafficrs);
         Python::initialize();
 
@@ -236,10 +246,10 @@ trafficrs.hello_world()
             }
         };
 
-        Simulator::init(sumo, Some(module), false)
+        Simulator::init(sumo, Some(module), net)
     } else {
         info!("Running in baseline mode without the V2X plugin");
-        Simulator::init(sumo, None, true)
+        Simulator::init(sumo, None, net)
     } {
         Ok(sim) => sim,
         Err(e) => {
@@ -250,23 +260,45 @@ trafficrs.hello_world()
 
     info!("Simulation initialized");
 
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let simulation_simulator = Arc::new(Mutex::new(simulator));
+    let api_simulator = simulation_simulator.clone();
+    let (tx, rx) = mpsc::channel();
+    let tx1 = tx.clone();
+    thread::spawn(move || {
+        tx.send(run_simulation(simulation_simulator)).unwrap();
+    });
+    thread::spawn(move || tx1.send(rt.block_on(run_api(api_simulator))).unwrap());
+    rx.recv().unwrap()
+}
+
+fn run_simulation(simulator: Arc<Mutex<Simulator>>) -> ExitCode {
+    let mut simulator = simulator.lock().unwrap();
     let global_start = Instant::now();
     while !simulator.is_end() {
+        let step_start = Instant::now();
         if let Err(e) = simulator.tick() {
             error!("Simulation step failed: {}", e);
             break;
         }
         if simulator.step_current.is_multiple_of(CONFIG.log_interval) {
-            let end = global_start.elapsed();
+            let global_time = global_start.elapsed();
+            let step_time = step_start.elapsed();
             let simluation_elapsed = simulator.step_current * simulator.step;
             info!(
-                "Progress: step={}, simulation_time={}ms, elapsed={}ms, complete={:.2}%, speed={:.2}x",
+                "Progress: step={}, simulation_time={}ms, elapsed={}ms, step_time={}ms, avg_step_time={:.2}ms, complete={:.2}%, speed={:.2}x",
                 simulator.step_current,
                 simulator.time_begin + simluation_elapsed,
-                end.as_millis(),
+                global_time.as_millis(),
+                step_time.as_millis(),
+                (global_time.as_millis() as f64) / (simulator.step_current as f64),
                 ((simluation_elapsed * 100) as f64)
                     / ((simulator.time_end - simulator.time_begin) as f64),
-                (simluation_elapsed as f64) / (end.as_millis() as f64)
+                (simluation_elapsed as f64) / (global_time.as_millis() as f64)
             );
             if !ARGS.baseline {
                 let (delay, loss) = simulator.v2x_stats();
@@ -285,4 +317,19 @@ trafficrs.hello_world()
         error!("Simulation terminated before reaching the configured end time");
         ExitCode::FAILURE
     }
+}
+
+async fn run_api(simulator: Arc<Mutex<Simulator>>) -> ExitCode {
+    let lock = tokio::sync::Mutex::new(());
+    let app = Router::new().route("/status", routing::get(status));
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+
+    axum::serve(listener, app).await.unwrap();
+
+    ExitCode::SUCCESS
+}
+
+async fn status() -> &'static str {
+    "health"
 }

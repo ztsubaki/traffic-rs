@@ -1,16 +1,17 @@
 use pyo3::{Py, PyAny};
-use rand::{RngExt, rngs::ThreadRng};
+use rand::{RngExt, rngs::StdRng};
 use rand_distr::{Distribution, Normal};
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 
 use crate::conf::CONFIG;
-use crate::simulator::{VehicleID, net::TrafficLightID};
+use crate::net::TrafficLightID;
+use crate::simulator::VehicleID;
 
 pub struct Channel {
     queue: BinaryHeap<Reverse<Message>>,
     cloud_delay_generator: Normal<f32>,
-    rng: ThreadRng,
+    rng: StdRng,
     package_count: Vec<usize>,
     package_total: usize,
     delay_total: usize,
@@ -22,7 +23,7 @@ impl Channel {
         Channel {
             queue: BinaryHeap::new(),
             cloud_delay_generator,
-            rng: rand::rng(),
+            rng: rand::make_rng(),
             package_count: Vec::new(),
             package_total: 0,
             delay_total: 0,

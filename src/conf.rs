@@ -2,6 +2,7 @@ use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Read, Write};
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::process::exit;
 use std::str::FromStr;
@@ -24,6 +25,8 @@ pub struct Config {
     pub cloud_package_loss_rate: f64,
     pub output_dir: PathBuf,
     pub script: PathBuf,
+    pub listen_addr: IpAddr,
+    pub listen_port: u16,
     pub sumo: Sumo,
 }
 
@@ -40,6 +43,8 @@ impl Config {
             cloud_package_loss_rate: 0.001,
             output_dir: PathBuf::from_str("output").unwrap(),
             script: PathBuf::from_str("plugin.py").unwrap(),
+            listen_addr: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            listen_port: 8080,
             sumo: Sumo {
                 sumocfg: PathBuf::new(),
                 threads: 2,

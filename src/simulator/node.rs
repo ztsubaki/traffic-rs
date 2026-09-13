@@ -1,9 +1,11 @@
 use pyo3::{Py, PyAny, Python, pyclass, pymethods, types::PyAnyMethods};
 
-use crate::simulator::{
-    PyNet,
+use crate::{
     net::{Signals, TrafficLightID},
-    v2x::{Channel, Communicator, Message},
+    simulator::{
+        PyNet,
+        v2x::{Channel, Communicator, Message},
+    },
 };
 
 pub struct Node {

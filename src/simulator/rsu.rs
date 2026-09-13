@@ -1,10 +1,12 @@
 use pyo3::{IntoPyObject, Py, Python, pyclass};
 use std::collections::HashMap;
 
-use crate::simulator::{
-    Vehicle, VehicleID,
+use crate::{
     net::TrafficLightID,
-    v2x::{Channel, Communicator, Message},
+    simulator::{
+        Vehicle, VehicleID,
+        v2x::{Channel, Communicator, Message},
+    },
 };
 
 #[allow(clippy::upper_case_acronyms)]
