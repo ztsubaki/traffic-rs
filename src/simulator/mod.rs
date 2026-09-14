@@ -123,6 +123,9 @@ impl Simulator {
         module: Option<Py<PyModule>>,
         net: Arc<Net>,
     ) -> Result<Simulator, String> {
+        if module.is_some() && CONFIG.rsu_report_interval == 0 {
+            return Err("rsu_report_interval must be greater than zero milliseconds".to_owned());
+        }
         let time_begin = sumo.time_begin()?;
         let time_end = sumo.time_end()?;
         let step = sumo.step_length()?;
@@ -390,7 +393,11 @@ impl Simulator {
                 self.send_v2x(vehicle, time);
             }
             simulate_duration += simulate_start.elapsed();
-            if self.step_current.is_multiple_of(CONFIG.rsu_report_interval) {
+            let elapsed = time.saturating_sub(self.time_begin);
+            if elapsed != 0
+                && elapsed / CONFIG.rsu_report_interval
+                    > elapsed.saturating_sub(self.step) / CONFIG.rsu_report_interval
+            {
                 self.rsu
                     .as_mut()
                     .unwrap()
