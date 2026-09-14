@@ -22,6 +22,18 @@ struct Payload {
     len: usize,
 }
 #[repr(C)]
+pub struct SimulationStatistics {
+    pub current_time_millis: usize,
+    pub active_vehicle_count: usize,
+    pub loaded_vehicle_count: usize,
+    pub departed_vehicle_count: usize,
+    pub arrived_vehicle_count: usize,
+    pub starting_teleport_count: usize,
+    pub ending_teleport_count: usize,
+    pub collision_count: usize,
+    pub min_expected_vehicle_count: usize,
+}
+#[repr(C)]
 pub struct Vehicle {
     pub id: *const c_char,
     pub lane_id: *const c_char,
@@ -201,6 +213,7 @@ unsafe extern "C" {
     fn get_trafficlights() -> Payload;
     fn get_links() -> Payload;
     fn get_phases() -> Payload;
+    fn get_simulation_statistics() -> Payload;
 }
 
 const BRIDGE_SUCCESS: usize = 0;
@@ -296,6 +309,9 @@ impl Sumo {
     }
     pub fn get_phases(&self) -> Result<CVec<Phase>, String> {
         resolve_c_result_with_vec_payload(unsafe { get_phases() })
+    }
+    pub fn get_simulation_statistics(&self) -> Result<SimulationStatistics, String> {
+        resolve_c_result_with_struct_payload(unsafe { get_simulation_statistics() })
     }
     #[allow(unused)]
     fn get_parameter(&self, object: &str, parameter: &str) -> Result<String, String> {
@@ -409,4 +425,11 @@ fn resolve_c_result_with_vec_payload<T>(value: Payload) -> Result<CVec<T>, Strin
         }
         _ => Err("SUMO bridge returned an unknown status".to_string()),
     }
+}
+
+fn resolve_c_result_with_struct_payload<T>(value: Payload) -> Result<T, String> {
+    let payload = resolve_c_result_with_payload(value)?;
+    let result = unsafe { (payload as *const T).read() };
+    unsafe { libc::free(payload) };
+    Ok(result)
 }

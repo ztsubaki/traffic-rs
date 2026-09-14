@@ -76,6 +76,32 @@ Payload sumo_close() {
     return Payload{BRIDGE_SUCCESS, 0, 0};
 }
 
+Payload get_simulation_statistics() {
+    try {
+        SimulationStatistics* statistics =
+            (SimulationStatistics*)malloc(sizeof(SimulationStatistics));
+        if (statistics == NULL) return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
+        statistics->current_time_millis =
+            (size_t)libsumo::Simulation::getCurrentTime();
+        statistics->active_vehicle_count = libsumo::Vehicle::getIDList().size();
+        statistics->loaded_vehicle_count = libsumo::Simulation::getLoadedNumber();
+        statistics->departed_vehicle_count =
+            libsumo::Simulation::getDepartedNumber();
+        statistics->arrived_vehicle_count = libsumo::Simulation::getArrivedNumber();
+        statistics->starting_teleport_count =
+            libsumo::Simulation::getStartingTeleportNumber();
+        statistics->ending_teleport_count =
+            libsumo::Simulation::getEndingTeleportNumber();
+        statistics->collision_count =
+            libsumo::Simulation::getCollidingVehiclesNumber();
+        statistics->min_expected_vehicle_count =
+            libsumo::Simulation::getMinExpectedNumber();
+        return Payload{BRIDGE_SUCCESS, (void*)statistics, 0};
+    } catch (const std::exception& e) {
+        return report_exception(e);
+    }
+}
+
 Payload get_parameter(char* obj, char* para) {
     const char* result = NULL;
     try {

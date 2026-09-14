@@ -51,7 +51,6 @@ pub async fn run_api(
         .route("/edges/{id}", routing::get(edge))
         .route("/lanes/{id}", routing::get(lane))
         .route("/junctions/{id}", routing::get(junction))
-        .route("/vehicles/statistics", routing::get(vehicle_statistics))
         .route("/vehicles/{id}", routing::get(vehicle));
     let app = Router::new()
         .route("/openapi.json", routing::get(openapi_document))
@@ -251,6 +250,7 @@ struct SimulationResponse {
     end_time_millis: usize,
     step_duration_millis: usize,
     current_step: usize,
+    statistics: GlobalStatistics,
 }
 async fn simulation(State(state): State<ApiState>) -> Result<Json<SimulationResponse>, ApiError> {
     let _simulation_gate = state.simulation_gate.try_read().map_err(|_| {
@@ -264,6 +264,7 @@ async fn simulation(State(state): State<ApiState>) -> Result<Json<SimulationResp
         end_time_millis: simulator.time_end,
         step_duration_millis: simulator.step,
         current_step: simulator.step_current,
+        statistics: simulator.global_statistics(),
     }))
 }
 
@@ -338,22 +339,6 @@ async fn junction(
         .ok_or_else(|| ApiError::not_found("junction", id))
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct VehicleStatistics {
-    vehicle_count: usize,
-}
-async fn vehicle_statistics(
-    State(state): State<ApiState>,
-) -> Result<Json<VehicleStatistics>, ApiError> {
-    let _simulation_gate = state.simulation_gate.try_read().map_err(|_| {
-        ApiError::conflict("Vehicle statistics cannot be read while a run is in progress.")
-    })?;
-    let _gate = state.gate.lock().await;
-    Ok(Json(VehicleStatistics {
-        vehicle_count: state.simulator.lock().unwrap().vehicle_count(),
-    }))
-}
 async fn vehicle(
     State(state): State<ApiState>,
     path: Result<Path<usize>, PathRejection>,

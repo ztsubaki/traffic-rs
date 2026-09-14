@@ -14,6 +14,17 @@ struct Payload {
     void* payload;
     size_t len;
 };
+struct SimulationStatistics {
+    size_t current_time_millis;
+    size_t active_vehicle_count;
+    size_t loaded_vehicle_count;
+    size_t departed_vehicle_count;
+    size_t arrived_vehicle_count;
+    size_t starting_teleport_count;
+    size_t ending_teleport_count;
+    size_t collision_count;
+    size_t min_expected_vehicle_count;
+};
 struct Vehicle {
     char* id;
     char* lane_id;
@@ -73,6 +84,7 @@ struct Payload get_lanes();
 struct Payload get_trafficlights();
 struct Payload get_links();
 struct Payload get_phases();
+struct Payload get_simulation_statistics();
 #ifdef __cplusplus
 }
 #endif

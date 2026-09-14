@@ -51,7 +51,40 @@ pub struct Simulator {
     cloud: Option<Cloud>,
     vehicles: Vec<Vehicle>,
     vehicle_ids: HashMap<CString, VehicleID>,
+    global_statistics: GlobalStatisticsCounters,
     baseline: bool,
+}
+
+#[derive(Default)]
+struct GlobalStatisticsCounters {
+    current_time_millis: usize,
+    active_vehicle_count: usize,
+    loaded_vehicle_count: usize,
+    departed_vehicle_count: usize,
+    arrived_vehicle_count: usize,
+    starting_teleport_count: usize,
+    ending_teleport_count: usize,
+    collision_count: usize,
+    min_expected_vehicle_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalStatistics {
+    pub current_time_millis: usize,
+    pub active_vehicle_count: usize,
+    pub observed_vehicle_count: usize,
+    pub loaded_vehicle_count: usize,
+    pub departed_vehicle_count: usize,
+    pub arrived_vehicle_count: usize,
+    pub starting_teleport_count: usize,
+    pub ending_teleport_count: usize,
+    pub collision_count: usize,
+    pub min_expected_vehicle_count: usize,
+    pub total_time_loss_seconds: f64,
+    pub average_time_loss_seconds: f64,
+    pub total_waiting_time_seconds: f64,
+    pub average_waiting_time_seconds: f64,
 }
 
 impl Simulator {
@@ -116,6 +149,10 @@ impl Simulator {
                 cloud: Some(cloud),
                 vehicles: Vec::new(),
                 vehicle_ids: HashMap::new(),
+                global_statistics: GlobalStatisticsCounters {
+                    current_time_millis: time_begin,
+                    ..Default::default()
+                },
                 baseline: false,
             })
         } else {
@@ -132,6 +169,10 @@ impl Simulator {
                 cloud: None,
                 vehicles: Vec::new(),
                 vehicle_ids: HashMap::new(),
+                global_statistics: GlobalStatisticsCounters {
+                    current_time_millis: time_begin,
+                    ..Default::default()
+                },
                 baseline: true,
             })
         }
@@ -201,8 +242,39 @@ impl Simulator {
     pub fn node_count(&self) -> usize {
         self.nodes.as_ref().map_or(0, Vec::len)
     }
-    pub fn vehicle_count(&self) -> usize {
-        self.vehicles.len()
+    pub fn global_statistics(&self) -> GlobalStatistics {
+        let observed_vehicle_count = self.vehicles.len();
+        let total_time_loss_seconds = self.vehicles.iter().map(|vehicle| vehicle.time_loss).sum();
+        let total_waiting_time_seconds = self
+            .vehicles
+            .iter()
+            .map(|vehicle| vehicle.waiting_time)
+            .sum();
+        let divisor = observed_vehicle_count as f64;
+        GlobalStatistics {
+            current_time_millis: self.global_statistics.current_time_millis,
+            active_vehicle_count: self.global_statistics.active_vehicle_count,
+            observed_vehicle_count,
+            loaded_vehicle_count: self.global_statistics.loaded_vehicle_count,
+            departed_vehicle_count: self.global_statistics.departed_vehicle_count,
+            arrived_vehicle_count: self.global_statistics.arrived_vehicle_count,
+            starting_teleport_count: self.global_statistics.starting_teleport_count,
+            ending_teleport_count: self.global_statistics.ending_teleport_count,
+            collision_count: self.global_statistics.collision_count,
+            min_expected_vehicle_count: self.global_statistics.min_expected_vehicle_count,
+            total_time_loss_seconds,
+            average_time_loss_seconds: if observed_vehicle_count == 0 {
+                0.0
+            } else {
+                total_time_loss_seconds / divisor
+            },
+            total_waiting_time_seconds,
+            average_waiting_time_seconds: if observed_vehicle_count == 0 {
+                0.0
+            } else {
+                total_waiting_time_seconds / divisor
+            },
+        }
     }
     pub fn is_end(&self) -> bool {
         self.time_begin + self.step * self.step_current >= self.time_end
@@ -308,6 +380,20 @@ impl Simulator {
         .step()?;
         sumo_duration += sumo_start.elapsed();
         self.step_current += 1;
+        let statistics = self
+            .sumo
+            .lock()
+            .map_err(|e| e.to_string())?
+            .get_simulation_statistics()?;
+        self.global_statistics.current_time_millis = statistics.current_time_millis;
+        self.global_statistics.active_vehicle_count = statistics.active_vehicle_count;
+        self.global_statistics.loaded_vehicle_count += statistics.loaded_vehicle_count;
+        self.global_statistics.departed_vehicle_count += statistics.departed_vehicle_count;
+        self.global_statistics.arrived_vehicle_count += statistics.arrived_vehicle_count;
+        self.global_statistics.starting_teleport_count += statistics.starting_teleport_count;
+        self.global_statistics.ending_teleport_count += statistics.ending_teleport_count;
+        self.global_statistics.collision_count += statistics.collision_count;
+        self.global_statistics.min_expected_vehicle_count = statistics.min_expected_vehicle_count;
         Ok((
             simulate_duration,
             script_duration,
