@@ -526,6 +526,10 @@ impl Simulator {
         }
     }
 
+    pub fn vehicles(&self) -> &[Vehicle] {
+        &self.vehicles
+    }
+
     fn get_vehicle_mut(&mut self, vehicle_id: VehicleID) -> Option<&mut Vehicle> {
         if self.vehicles.len() > vehicle_id.to_usize() {
             Some(&mut self.vehicles[vehicle_id.to_usize()])

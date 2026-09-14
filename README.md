@@ -35,6 +35,11 @@ RFC 9457 fields `type`, `title`, `status`, and `detail`.
 traffic metrics for each controlled link. `pressure` is the incoming queue count
 minus the outgoing queue count for the movement.
 
+Each ID-based resource endpoint also has a collection endpoint:
+`GET /api/v1/traffic-lights`, `/traffic-lights/states`, `/edges`, `/lanes`,
+`/junctions`, and `/vehicles`. Entries contain `resourceId` for use with the
+corresponding detail endpoint, for example `/api/v1/vehicles/{resourceId}`.
+
 `GET /api/v1/simulation/run?steps=10` is the sole exception: it is a Server-Sent
 Events stream. It emits `accepted`, `completed`, or `failed` events; the completed
 event contains the run statistics.

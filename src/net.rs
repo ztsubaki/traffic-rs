@@ -340,6 +340,18 @@ impl Net {
     pub fn get_num_trafficlights(&self) -> usize {
         self.trafficlight_ids.len()
     }
+    pub fn edges(&self) -> &[Edge] {
+        &self.edges
+    }
+    pub fn junctions(&self) -> &[Junction] {
+        &self.junctions
+    }
+    pub fn lanes(&self) -> &[Lane] {
+        &self.lanes
+    }
+    pub fn trafficlights(&self) -> &[TrafficLight] {
+        &self.trafficlights
+    }
     pub fn get_num_links(&self) -> (usize, usize) {
         (self.num_links, self.num_controlled_links)
     }

@@ -291,6 +291,35 @@ trafficrs.hello_world()
     let (api_to_sim_tx, api_to_sim_rx) = mpsc::channel::<usize>();
     let (tx0, rx0) = mpsc::channel();
     let tx1 = tx0.clone();
+    let (api_startup_tx, api_startup_rx) = mpsc::channel();
+    thread::spawn(move || {
+        if tx1
+            .send(rt.block_on(api::run_api(
+                api_simulator,
+                api_net,
+                api_to_sim_tx,
+                sim_to_api_rx,
+                api_startup_tx,
+            )))
+            .is_err()
+        {
+            error!("API server exited after its result receiver was dropped.");
+        }
+    });
+    match api_startup_rx.recv() {
+        Ok(Ok(())) => info!(
+            "HTTP API startup confirmed on {}:{}",
+            CONFIG.listen_addr, CONFIG.listen_port
+        ),
+        Ok(Err(detail)) => {
+            error!("HTTP API startup failed; simulation will not start: {detail}");
+            return ExitCode::FAILURE;
+        }
+        Err(error) => {
+            error!("HTTP API thread exited before reporting startup status: {error}");
+            return ExitCode::FAILURE;
+        }
+    }
     thread::spawn(move || {
         if tx0
             .send(run_simulation(
@@ -301,19 +330,6 @@ trafficrs.hello_world()
             .is_err()
         {
             error!("Simulation worker exited after its result receiver was dropped.");
-        }
-    });
-    thread::spawn(move || {
-        if tx1
-            .send(rt.block_on(api::run_api(
-                api_simulator,
-                api_net,
-                api_to_sim_tx,
-                sim_to_api_rx,
-            )))
-            .is_err()
-        {
-            error!("API server exited after its result receiver was dropped.");
         }
     });
     match rx0.recv() {

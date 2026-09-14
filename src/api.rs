@@ -31,6 +31,7 @@ pub async fn run_api(
     net: Arc<Net>,
     tx: Sender<usize>,
     rx: tokio::sync::mpsc::Receiver<Result<RunStat, String>>,
+    startup_tx: Sender<Result<(), String>>,
 ) -> ExitCode {
     let sys = Arc::new(RwLock::new(System::new_all()));
     let state = ApiState {
@@ -47,44 +48,50 @@ pub async fn run_api(
         .route("/simulation", routing::get(simulation))
         .route("/simulation/run", routing::get(run_simulation))
         .route("/network/statistics", routing::get(network_statistics))
+        .route("/traffic-lights", routing::get(traffic_lights))
+        .route("/traffic-lights/states", routing::get(traffic_light_states))
         .route("/traffic-lights/{id}", routing::get(traffic_light))
         .route(
             "/traffic-lights/{id}/state",
             routing::get(traffic_light_state),
         )
+        .route("/edges", routing::get(edges))
         .route("/edges/{id}", routing::get(edge))
+        .route("/lanes", routing::get(lanes))
         .route("/lanes/{id}", routing::get(lane))
+        .route("/junctions", routing::get(junctions))
         .route("/junctions/{id}", routing::get(junction))
+        .route("/vehicles", routing::get(vehicles))
         .route("/vehicles/{id}", routing::get(vehicle));
     let app = Router::new()
         .route("/openapi.json", routing::get(openapi_document))
         .nest(API_PREFIX, api)
         .fallback(not_found)
         .with_state(state);
-    let listener = match tokio::net::TcpListener::bind(SocketAddr::new(
-        CONFIG.listen_addr,
-        CONFIG.listen_port,
-    ))
-    .await
-    {
+    let address = SocketAddr::new(CONFIG.listen_addr, CONFIG.listen_port);
+    let listener = match tokio::net::TcpListener::bind(address).await {
         Ok(listener) => listener,
         Err(error) => {
-            log::error!(
-                "Failed to bind the API server to {}:{}: {}",
-                CONFIG.listen_addr,
-                CONFIG.listen_port,
-                error
-            );
+            let detail = format!("Failed to bind the HTTP API server to {address}: {error}");
+            log::error!("{detail}");
+            let _ = startup_tx.send(Err(detail));
             return ExitCode::FAILURE;
         }
     };
     let process_id = match get_current_pid() {
         Ok(process_id) => process_id,
         Err(error) => {
-            log::error!("Failed to determine the current process ID: {error}");
+            let detail = format!("Failed to determine the current process ID: {error}");
+            log::error!("{detail}");
+            let _ = startup_tx.send(Err(detail));
             return ExitCode::FAILURE;
         }
     };
+    log::info!("HTTP API server listening on http://{address}");
+    if startup_tx.send(Ok(())).is_err() {
+        log::error!("HTTP API startup receiver was dropped before startup completed.");
+        return ExitCode::FAILURE;
+    }
     tokio::spawn(async move {
         loop {
             {
@@ -289,6 +296,84 @@ async fn network_statistics(State(state): State<ApiState>) -> Json<NetworkStatis
     })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ResourceEntry<T> {
+    resource_id: usize,
+    resource: T,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrafficLightStateEntry {
+    resource_id: usize,
+    state: TrafficLightStatus,
+}
+
+fn resource_entries<T: Clone>(resources: &[T]) -> Vec<ResourceEntry<T>> {
+    resources
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(resource_id, resource)| ResourceEntry {
+            resource_id,
+            resource,
+        })
+        .collect()
+}
+
+async fn traffic_lights(State(state): State<ApiState>) -> Json<Vec<ResourceEntry<TrafficLight>>> {
+    Json(resource_entries(state.net.trafficlights()))
+}
+
+async fn edges(State(state): State<ApiState>) -> Json<Vec<ResourceEntry<Edge>>> {
+    Json(resource_entries(state.net.edges()))
+}
+
+async fn lanes(State(state): State<ApiState>) -> Json<Vec<ResourceEntry<Lane>>> {
+    Json(resource_entries(state.net.lanes()))
+}
+
+async fn junctions(State(state): State<ApiState>) -> Json<Vec<ResourceEntry<Junction>>> {
+    Json(resource_entries(state.net.junctions()))
+}
+
+async fn vehicles(
+    State(state): State<ApiState>,
+) -> Result<Json<Vec<ResourceEntry<Vehicle>>>, ApiError> {
+    let _simulation_gate = state
+        .simulation_gate
+        .try_read()
+        .map_err(|_| ApiError::conflict("Vehicles cannot be read while a run is in progress."))?;
+    let _gate = state.gate.lock().await;
+    let simulator = state.simulator.lock().unwrap();
+    Ok(Json(resource_entries(simulator.vehicles())))
+}
+
+async fn traffic_light_states(
+    State(state): State<ApiState>,
+) -> Result<Json<Vec<TrafficLightStateEntry>>, ApiError> {
+    let _simulation_gate = state.simulation_gate.try_read().map_err(|_| {
+        ApiError::conflict("Traffic light states cannot be read while a run is in progress.")
+    })?;
+    let _gate = state.gate.lock().await;
+    let simulator = state.simulator.lock().unwrap();
+    let traffic_lights = state
+        .net
+        .trafficlights()
+        .iter()
+        .enumerate()
+        .map(|(resource_id, _)| {
+            let state = simulator
+                .traffic_light_status(TrafficLightID::from_usize(resource_id))
+                .map_err(ApiError::internal)?
+                .ok_or_else(|| ApiError::internal("Traffic light disappeared from the network."))?;
+            Ok(TrafficLightStateEntry { resource_id, state })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    Ok(Json(traffic_lights))
+}
+
 async fn resource_id(path: Result<Path<usize>, PathRejection>) -> Result<usize, ApiError> {
     path.map(|Path(id)| id).map_err(|_| {
         ApiError::bad_request("The path parameter `id` must be a non-negative integer.")
@@ -310,7 +395,7 @@ async fn traffic_light(
 async fn traffic_light_state(
     State(state): State<ApiState>,
     path: Result<Path<usize>, PathRejection>,
-) -> Result<Json<TrafficLightState>, ApiError> {
+) -> Result<Json<TrafficLightStatus>, ApiError> {
     let id = resource_id(path).await?;
     let traffic_light_id = TrafficLightID::from_usize(id);
     if state.net.get_trafficlight(traffic_light_id).is_none() {
