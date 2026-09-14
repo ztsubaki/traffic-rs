@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -388,10 +389,23 @@ Payload get_phases() {
                         logics[logic_index].phases[phase_index]->state);
                     phase_program_indexs.emplace_back(logic_index);
                     phase_indexs.emplace_back(phase_index);
+                    const auto& logic = logics[logic_index];
+                    const auto& phase = logic.phases[phase_index];
                     std::vector<size_t> nexts;
-                    for (auto next :
-                         logics[logic_index].phases[phase_index]->next)
-                        nexts.emplace_back(next);
+                    if (phase->next.empty()) {
+                        nexts.emplace_back((phase_index + 1) %
+                                           logic.phases.size());
+                    } else {
+                        for (auto next : phase->next) {
+                            if (next < 0 || static_cast<size_t>(next) >=
+                                                logic.phases.size()) {
+                                throw std::runtime_error(
+                                    "Traffic light phase references an invalid "
+                                    "successor index");
+                            }
+                            nexts.emplace_back(static_cast<size_t>(next));
+                        }
+                    }
                     phase_next_indexs.emplace_back(nexts);
                     size++;
                 }

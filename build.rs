@@ -17,6 +17,8 @@ fn main() {
                 .std("c++17")
                 .include(&include)
                 .file("bridge/libsumo-bridge.cpp")
+                .flag("-Wall")
+                .flag("-Werror")
                 .compile("libsumo-bridge");
             println!("cargo:rustc-link-search=native={}", lib_dir.display());
         }
@@ -25,6 +27,8 @@ fn main() {
                 .cpp(true)
                 .std("c++17")
                 .file("bridge/libsumo-bridge.cpp")
+                .flag("Wall")
+                .flag("Werr")
                 .compile("libsumo-bridge");
         }
     }
