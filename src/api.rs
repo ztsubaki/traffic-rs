@@ -48,6 +48,10 @@ pub async fn run_api(
         .route("/simulation/run", routing::get(run_simulation))
         .route("/network/statistics", routing::get(network_statistics))
         .route("/traffic-lights/{id}", routing::get(traffic_light))
+        .route(
+            "/traffic-lights/{id}/state",
+            routing::get(traffic_light_state),
+        )
         .route("/edges/{id}", routing::get(edge))
         .route("/lanes/{id}", routing::get(lane))
         .route("/junctions/{id}", routing::get(junction))
@@ -301,6 +305,29 @@ async fn traffic_light(
         .cloned()
         .map(Json)
         .ok_or_else(|| ApiError::not_found("traffic light", id))
+}
+
+async fn traffic_light_state(
+    State(state): State<ApiState>,
+    path: Result<Path<usize>, PathRejection>,
+) -> Result<Json<TrafficLightState>, ApiError> {
+    let id = resource_id(path).await?;
+    let traffic_light_id = TrafficLightID::from_usize(id);
+    if state.net.get_trafficlight(traffic_light_id).is_none() {
+        return Err(ApiError::not_found("traffic light", id));
+    }
+    let _simulation_gate = state.simulation_gate.try_read().map_err(|_| {
+        ApiError::conflict("Traffic light state cannot be read while a run is in progress.")
+    })?;
+    let _gate = state.gate.lock().await;
+    let traffic_light_status = state
+        .simulator
+        .lock()
+        .unwrap()
+        .traffic_light_status(traffic_light_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("traffic light", id))?;
+    Ok(Json(traffic_light_status))
 }
 async fn lane(
     State(state): State<ApiState>,

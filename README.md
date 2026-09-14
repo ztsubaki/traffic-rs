@@ -31,6 +31,10 @@ The server exposes a versioned JSON API at `/api/v1` and its OpenAPI 3.1 documen
 `GET /api/v1/traffic-lights/0`. JSON errors use `application/problem+json` and the
 RFC 9457 fields `type`, `title`, `status`, and `detail`.
 
+`GET /api/v1/traffic-lights/0/state` returns the current SUMO signal state and
+traffic metrics for each controlled link. `pressure` is the incoming queue count
+minus the outgoing queue count for the movement.
+
 `GET /api/v1/simulation/run?steps=10` is the sole exception: it is a Server-Sent
 Events stream. It emits `accepted`, `completed`, or `failed` events; the completed
 event contains the run statistics.

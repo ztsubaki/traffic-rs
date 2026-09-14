@@ -84,10 +84,12 @@ Payload get_simulation_statistics() {
         statistics->current_time_millis =
             (size_t)libsumo::Simulation::getCurrentTime();
         statistics->active_vehicle_count = libsumo::Vehicle::getIDList().size();
-        statistics->loaded_vehicle_count = libsumo::Simulation::getLoadedNumber();
+        statistics->loaded_vehicle_count =
+            libsumo::Simulation::getLoadedNumber();
         statistics->departed_vehicle_count =
             libsumo::Simulation::getDepartedNumber();
-        statistics->arrived_vehicle_count = libsumo::Simulation::getArrivedNumber();
+        statistics->arrived_vehicle_count =
+            libsumo::Simulation::getArrivedNumber();
         statistics->starting_teleport_count =
             libsumo::Simulation::getStartingTeleportNumber();
         statistics->ending_teleport_count =
@@ -138,6 +140,37 @@ Payload set_trafficlight(const char* trafficlight_id, const char* state) {
         return report_exception(e);
     }
     return Payload{BRIDGE_SUCCESS, 0, 0};
+}
+
+Payload get_trafficlight_state(const char* trafficlight_id) {
+    try {
+        std::string state = libsumo::TrafficLight::getRedYellowGreenState(
+            std::string(trafficlight_id));
+        char* payload = strdup(state.c_str());
+        if (payload == NULL) return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
+        return Payload{BRIDGE_SUCCESS, payload, 0};
+    } catch (const std::exception& e) {
+        return report_exception(e);
+    }
+}
+
+Payload get_lane_traffic_metrics(const char* lane_id) {
+    try {
+        LaneTrafficMetrics* metrics =
+            (LaneTrafficMetrics*)malloc(sizeof(LaneTrafficMetrics));
+        if (metrics == NULL) return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
+        const std::string id(lane_id);
+        metrics->vehicle_count =
+            (size_t)libsumo::Lane::getLastStepVehicleNumber(id);
+        metrics->queued_vehicle_count =
+            (size_t)libsumo::Lane::getLastStepHaltingNumber(id);
+        metrics->mean_speed = libsumo::Lane::getLastStepMeanSpeed(id);
+        metrics->occupancy_percent = libsumo::Lane::getLastStepOccupancy(id);
+        metrics->waiting_time_seconds = libsumo::Lane::getWaitingTime(id);
+        return Payload{BRIDGE_SUCCESS, (void*)metrics, 0};
+    } catch (const std::exception& e) {
+        return report_exception(e);
+    }
 }
 
 Payload get_vehicles() {

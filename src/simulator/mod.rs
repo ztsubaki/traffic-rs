@@ -55,6 +55,36 @@ pub struct Simulator {
     baseline: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficLightStatus {
+    pub signals: Signals,
+    pub links: Vec<TrafficLightLinkStatus>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficLightLinkStatus {
+    pub link_index: usize,
+    pub movements: Vec<TrafficLightMovementStatus>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficLightMovementStatus {
+    pub source_lane_id: LaneID,
+    pub via_lane_id: Option<LaneID>,
+    pub target_lane_id: LaneID,
+    pub incoming_vehicle_count: usize,
+    pub incoming_queue_count: usize,
+    pub incoming_mean_speed: f64,
+    pub incoming_occupancy_percent: f64,
+    pub incoming_waiting_time_seconds: f64,
+    pub outgoing_vehicle_count: usize,
+    pub outgoing_queue_count: usize,
+    pub pressure: i64,
+}
+
 #[derive(Default)]
 struct GlobalStatisticsCounters {
     current_time_millis: usize,
@@ -241,6 +271,60 @@ impl Simulator {
 
     pub fn node_count(&self) -> usize {
         self.nodes.as_ref().map_or(0, Vec::len)
+    }
+    pub fn traffic_light_status(
+        &self,
+        traffic_light_id: TrafficLightID,
+    ) -> Result<Option<TrafficLightStatus>, String> {
+        let traffic_light = match self.net.get_trafficlight(traffic_light_id) {
+            Some(traffic_light) => traffic_light,
+            None => return Ok(None),
+        };
+        let sumo = self.sumo.lock().map_err(|error| error.to_string())?;
+        let state = sumo.get_trafficlight_state(&traffic_light.id)?;
+        let signals = Signals::from_str(&state)
+            .map_err(|error| format!("SUMO returned an invalid traffic light state: {error}"))?;
+        let links = traffic_light
+            .links
+            .iter()
+            .enumerate()
+            .map(|(link_index, movements)| {
+                let movements = movements
+                    .iter()
+                    .map(|movement| {
+                        let source_lane =
+                            self.net.get_lane(movement.source_lane_id).ok_or_else(|| {
+                                "Traffic light references an unknown source lane".to_string()
+                            })?;
+                        let target_lane =
+                            self.net.get_lane(movement.target_lane_id).ok_or_else(|| {
+                                "Traffic light references an unknown target lane".to_string()
+                            })?;
+                        let incoming = sumo.get_lane_traffic_metrics(&source_lane.id)?;
+                        let outgoing = sumo.get_lane_traffic_metrics(&target_lane.id)?;
+                        Ok(TrafficLightMovementStatus {
+                            source_lane_id: movement.source_lane_id,
+                            via_lane_id: movement.via_lane_id,
+                            target_lane_id: movement.target_lane_id,
+                            incoming_vehicle_count: incoming.vehicle_count,
+                            incoming_queue_count: incoming.queued_vehicle_count,
+                            incoming_mean_speed: incoming.mean_speed,
+                            incoming_occupancy_percent: incoming.occupancy_percent,
+                            incoming_waiting_time_seconds: incoming.waiting_time_seconds,
+                            outgoing_vehicle_count: outgoing.vehicle_count,
+                            outgoing_queue_count: outgoing.queued_vehicle_count,
+                            pressure: incoming.queued_vehicle_count as i64
+                                - outgoing.queued_vehicle_count as i64,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                Ok(TrafficLightLinkStatus {
+                    link_index,
+                    movements,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(Some(TrafficLightStatus { signals, links }))
     }
     pub fn global_statistics(&self) -> GlobalStatistics {
         let observed_vehicle_count = self.vehicles.len();

@@ -34,6 +34,15 @@ pub struct SimulationStatistics {
     pub min_expected_vehicle_count: usize,
 }
 #[repr(C)]
+#[derive(Clone)]
+pub struct LaneTrafficMetrics {
+    pub vehicle_count: usize,
+    pub queued_vehicle_count: usize,
+    pub mean_speed: f64,
+    pub occupancy_percent: f64,
+    pub waiting_time_seconds: f64,
+}
+#[repr(C)]
 pub struct Vehicle {
     pub id: *const c_char,
     pub lane_id: *const c_char,
@@ -206,6 +215,8 @@ unsafe extern "C" {
     fn get_parameter(obj: *const c_char, para: *const c_char) -> Payload;
     fn get_option(opt: *const c_char) -> Payload;
     fn set_trafficlight(trafficlight_id: *const c_char, state: *const c_char) -> Payload;
+    fn get_trafficlight_state(trafficlight_id: *const c_char) -> Payload;
+    fn get_lane_traffic_metrics(lane_id: *const c_char) -> Payload;
     fn get_edges() -> Payload;
     fn get_vehicles() -> Payload;
     fn get_junctions() -> Payload;
@@ -361,6 +372,27 @@ impl Sumo {
         resolve_c_result_no_payload(unsafe {
             set_trafficlight(trafficlight_id.as_ptr(), state.as_ptr())
         })
+    }
+    pub fn get_trafficlight_state(&self, trafficlight_id: &str) -> Result<String, String> {
+        let trafficlight_id = to_c_string(trafficlight_id, "traffic light ID")?;
+        match resolve_c_result_with_payload(unsafe {
+            get_trafficlight_state(trafficlight_id.as_ptr())
+        }) {
+            Ok(payload) => {
+                let state = unsafe { CStr::from_ptr(payload as *const i8) }
+                    .to_string_lossy()
+                    .into_owned();
+                unsafe {
+                    libc::free(payload);
+                }
+                Ok(state)
+            }
+            Err(error) => Err(error),
+        }
+    }
+    pub fn get_lane_traffic_metrics(&self, lane_id: &str) -> Result<LaneTrafficMetrics, String> {
+        let lane_id = to_c_string(lane_id, "lane ID")?;
+        resolve_c_result_with_struct_payload(unsafe { get_lane_traffic_metrics(lane_id.as_ptr()) })
     }
 }
 

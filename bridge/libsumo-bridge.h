@@ -25,6 +25,13 @@ struct SimulationStatistics {
     size_t collision_count;
     size_t min_expected_vehicle_count;
 };
+struct LaneTrafficMetrics {
+    size_t vehicle_count;
+    size_t queued_vehicle_count;
+    double mean_speed;
+    double occupancy_percent;
+    double waiting_time_seconds;
+};
 struct Vehicle {
     char* id;
     char* lane_id;
@@ -77,6 +84,8 @@ struct Payload sumo_close();
 struct Payload get_parameter(char* obj, char* para);
 struct Payload get_option(char* opt);
 struct Payload set_trafficlight(const char* trafficlight_id, const char* state);
+struct Payload get_trafficlight_state(const char* trafficlight_id);
+struct Payload get_lane_traffic_metrics(const char* lane_id);
 struct Payload get_vehicles();
 struct Payload get_edges();
 struct Payload get_junctions();
