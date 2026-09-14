@@ -43,6 +43,17 @@ pub struct LaneTrafficMetrics {
     pub waiting_time_seconds: f64,
 }
 #[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Position {
+    pub x: c_double,
+    pub y: c_double,
+}
+#[repr(C)]
+pub struct Shape {
+    pub points: *mut Position,
+    pub len: usize,
+}
+#[repr(C)]
 pub struct Vehicle {
     pub id: *const c_char,
     pub lane_id: *const c_char,
@@ -53,6 +64,7 @@ pub struct Vehicle {
     pub time_loss: c_double,
     pub next_trafficlight: *const c_char,
     pub next_link_index: usize,
+    pub position: Position,
 }
 
 impl Drop for Vehicle {
@@ -88,12 +100,14 @@ impl Drop for Edge {
 #[repr(C)]
 pub struct Junction {
     pub id: *const c_char,
+    pub shape: Shape,
 }
 
 impl Drop for Junction {
     fn drop(&mut self) {
         unsafe {
             libc::free(self.id as *mut c_void);
+            libc::free(self.shape.points as *mut c_void);
         }
     }
 }
@@ -103,6 +117,7 @@ pub struct Lane {
     pub id: *const c_char,
     pub edge_id: *const c_char,
     pub length: f64,
+    pub shape: Shape,
 }
 
 impl Drop for Lane {
@@ -110,6 +125,7 @@ impl Drop for Lane {
         unsafe {
             libc::free(self.id as *mut c_void);
             libc::free(self.edge_id as *mut c_void);
+            libc::free(self.shape.points as *mut c_void);
         }
     }
 }

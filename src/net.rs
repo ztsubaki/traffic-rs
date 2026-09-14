@@ -8,6 +8,33 @@ use std::{
 
 use crate::sumo;
 
+#[derive(Serialize, Clone, Copy)]
+#[pyclass(frozen, skip_from_py_object)]
+pub struct Position {
+    #[pyo3(get)]
+    pub x: f64,
+    #[pyo3(get)]
+    pub y: f64,
+}
+
+fn positions(shape: &sumo::Shape) -> Result<Vec<Position>, String> {
+    if shape.len == 0 {
+        return Ok(Vec::new());
+    }
+    if shape.points.is_null() {
+        return Err("SUMO returned a shape with points but no coordinate buffer".to_string());
+    }
+    Ok(
+        unsafe { std::slice::from_raw_parts(shape.points, shape.len) }
+            .iter()
+            .map(|point| Position {
+                x: point.x,
+                y: point.y,
+            })
+            .collect(),
+    )
+}
+
 pub struct Net {
     edge_ids: HashMap<CString, EdgeID>,
     junction_ids: HashMap<CString, JunctionID>,
@@ -93,6 +120,7 @@ impl Net {
         }
         self.junctions.push(Junction {
             id: junction_id.to_string_lossy().to_string(),
+            shape: positions(&junction.shape)?,
         });
         let jid = JunctionID::from_usize(self.junctions.len() - 1);
         if self
@@ -162,6 +190,7 @@ impl Net {
             id: lane_id.to_string_lossy().to_string(),
             edge_id: edge,
             length: lane.length,
+            shape: positions(&lane.shape)?,
             links: Vec::new(),
             traffic_light_ids: HashSet::new(),
         });
@@ -580,6 +609,8 @@ pub struct Edge {
 pub struct Junction {
     #[pyo3(get)]
     pub id: String,
+    #[pyo3(get)]
+    pub shape: Vec<Position>,
 }
 
 #[derive(Serialize, Clone)]
@@ -592,6 +623,8 @@ pub struct Lane {
     pub edge_id: Option<EdgeID>,
     #[pyo3(get)]
     pub length: f64,
+    #[pyo3(get)]
+    pub shape: Vec<Position>,
     #[pyo3(get)]
     pub links: Vec<Link>,
     #[pyo3(get)]

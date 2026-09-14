@@ -17,6 +17,30 @@
 #include "libsumo/TrafficLight.h"
 #include "libsumo/Vehicle.h"
 
+void free_shape(Shape* shape) {
+    free(shape->points);
+    shape->points = NULL;
+    shape->len = 0;
+}
+
+bool copy_shape(Shape* destination,
+                const libsumo::TraCIPositionVector& source) {
+    destination->points = NULL;
+    destination->len = source.value.size();
+    if (destination->len == 0) return true;
+    destination->points =
+        (Position*)malloc(destination->len * sizeof(Position));
+    if (destination->points == NULL) {
+        destination->len = 0;
+        return false;
+    }
+    for (size_t i = 0; i < destination->len; i++) {
+        destination->points[i].x = source.value[i].x;
+        destination->points[i].y = source.value[i].y;
+    }
+    return true;
+}
+
 const char* demangle(const char* name) {
     int status = 0;
 
@@ -219,6 +243,9 @@ Payload get_vehicles() {
                 libsumo::Vehicle::getWaitingTime(vehicles_vec[i]);
             vehicles[i].time_loss =
                 libsumo::Vehicle::getTimeLoss(vehicles_vec[i]);
+            auto position = libsumo::Vehicle::getPosition(vehicles_vec[i]);
+            vehicles[i].position.x = position.x;
+            vehicles[i].position.y = position.y;
         }
     } catch (const std::exception& e) {
         return report_exception(e);
@@ -284,8 +311,15 @@ Payload get_junctions() {
         size = junctions_vec.size();
         for (size_t i = 0; i < size; i++) {
             junctions[i].id = strdup(junctions_vec[i].c_str());
-            if (junctions[i].id == NULL) {
-                for (size_t j = 0; j < i; j++) free(junctions[j].id);
+            bool shape_loaded =
+                copy_shape(&junctions[i].shape,
+                           libsumo::Junction::getShape(junctions_vec[i]));
+            if (junctions[i].id == NULL || !shape_loaded) {
+                free_shape(&junctions[i].shape);
+                for (size_t j = 0; j < i; j++) {
+                    free(junctions[j].id);
+                    free_shape(&junctions[j].shape);
+                }
                 free(junctions);
                 return Payload{BRIDGE_MALLOC_FAILED, 0, 0};
             }
@@ -314,10 +348,15 @@ Payload get_lanes() {
             lanes[i].id = strdup(lanes_vec[i].c_str());
             lanes[i].edge_id = strdup(edge_id.c_str());
             lanes[i].length = length;
-            if (lanes[i].id == NULL || lanes[i].edge_id == NULL) {
+            bool shape_loaded = copy_shape(
+                &lanes[i].shape, libsumo::Lane::getShape(lanes_vec[i]));
+            if (lanes[i].id == NULL || lanes[i].edge_id == NULL ||
+                !shape_loaded) {
+                free_shape(&lanes[i].shape);
                 for (size_t j = 0; j < i; j++) {
                     free(lanes[j].id);
                     free(lanes[j].edge_id);
+                    free_shape(&lanes[j].shape);
                 }
                 free(lanes);
                 return Payload{BRIDGE_MALLOC_FAILED, 0, 0};

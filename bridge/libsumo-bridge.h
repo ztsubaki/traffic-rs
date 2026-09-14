@@ -32,6 +32,14 @@ struct LaneTrafficMetrics {
     double occupancy_percent;
     double waiting_time_seconds;
 };
+struct Position {
+    double x;
+    double y;
+};
+struct Shape {
+    struct Position* points;
+    size_t len;
+};
 struct Vehicle {
     char* id;
     char* lane_id;
@@ -42,6 +50,7 @@ struct Vehicle {
     double time_loss;
     char* next_trafficlight;
     size_t next_link_index;
+    struct Position position;
 };
 struct Edge {
     char* id;
@@ -52,11 +61,13 @@ struct Edge {
 };
 struct Junction {
     char* id;
+    struct Shape shape;
 };
 struct Lane {
     char* id;
     char* edge_id;
     double length;
+    struct Shape shape;
 };
 struct TrafficLight {
     char* id;

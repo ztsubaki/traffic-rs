@@ -22,7 +22,8 @@ use std::{
 
 use crate::net::Net;
 use crate::net::{
-    Edge, EdgeID, Junction, JunctionID, Lane, LaneID, Signals, TrafficLight, TrafficLightID,
+    Edge, EdgeID, Junction, JunctionID, Lane, LaneID, Position, Signals, TrafficLight,
+    TrafficLightID,
 };
 use crate::sumo;
 use crate::{
@@ -250,6 +251,10 @@ impl Simulator {
                 veh.waiting_time = vehicle.waiting_time;
                 veh.time_loss = vehicle.time_loss;
                 veh.next_link_index = vehicle.next_link_index;
+                veh.position = Position {
+                    x: vehicle.position.x,
+                    y: vehicle.position.y,
+                };
                 id
             }
             None => {
@@ -266,6 +271,10 @@ impl Simulator {
                     waiting_time: vehicle.waiting_time,
                     time_loss: vehicle.time_loss,
                     next_link_index: vehicle.next_link_index,
+                    position: Position {
+                        x: vehicle.position.x,
+                        y: vehicle.position.y,
+                    },
                 });
                 VehicleID::from_usize(self.vehicle_ids.len() - 1)
             }
@@ -639,6 +648,8 @@ pub struct Vehicle {
     #[pyo3(get)]
     #[serde(rename = "nextLinkIndex")]
     pub next_link_index: usize,
+    #[pyo3(get)]
+    pub position: crate::net::Position,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

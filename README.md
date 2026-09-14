@@ -40,6 +40,10 @@ Each ID-based resource endpoint also has a collection endpoint:
 `/junctions`, and `/vehicles`. Entries contain `resourceId` for use with the
 corresponding detail endpoint, for example `/api/v1/vehicles/{resourceId}`.
 
+Lane and junction resources (`/lanes` and `/junctions`) include `shape`, an
+ordered array of absolute SUMO coordinates (`{"x": number, "y": number}`).
+Vehicle resources include their current absolute `position` in the same format.
+
 `GET /api/v1/simulation/run?steps=10` is the sole exception: it is a Server-Sent
 Events stream. It emits `accepted`, `completed`, or `failed` events; the completed
 event contains the run statistics.
