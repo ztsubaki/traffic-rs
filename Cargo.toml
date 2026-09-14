@@ -17,6 +17,10 @@ rand_distr = "0.6.0"
 pyo3 = "0.29.2"
 tokio = {version="1.53.1",features=["full"]}
 axum = "0.8.9"
+futures = "0.3.34"
+tokio-stream = "0.1.19"
+chrono = "0.4.45"
+sysinfo = "0.39.6"
 
 [build-dependencies]
 cc = "1.4.3"

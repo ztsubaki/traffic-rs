@@ -1,9 +1,9 @@
+mod api;
 mod conf;
 mod net;
 mod simulator;
 mod sumo;
 
-use axum::{Router, routing};
 use clap::Parser;
 use conf::CONFIG;
 use log::{debug, error, info, warn};
@@ -11,8 +11,9 @@ use pyo3::{Python, types::PyModule};
 use std::ffi::CString;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{env, thread};
 
 use simulator::{Simulator, trafficrs};
@@ -155,7 +156,6 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let net = Arc::new(net);
     if let Err(e) = env::set_current_dir(pwd.clone()) {
         error!(
             "Failed to restore the working directory to {}: {}",
@@ -174,6 +174,8 @@ fn main() -> ExitCode {
         sumo.route_files().unwrap()
     );
 
+    let simulation_net = Arc::new(net);
+    let api_net = simulation_net.clone();
     let simulator = match if !ARGS.baseline {
         pyo3::append_to_inittab!(trafficrs);
         Python::initialize();
@@ -246,10 +248,10 @@ trafficrs.hello_world()
             }
         };
 
-        Simulator::init(sumo, Some(module), net)
+        Simulator::init(sumo, Some(module), simulation_net)
     } else {
         info!("Running in baseline mode without the V2X plugin");
-        Simulator::init(sumo, None, net)
+        Simulator::init(sumo, None, simulation_net)
     } {
         Ok(sim) => sim,
         Err(e) => {
@@ -267,69 +269,102 @@ trafficrs.hello_world()
         .unwrap();
     let simulation_simulator = Arc::new(Mutex::new(simulator));
     let api_simulator = simulation_simulator.clone();
-    let (tx, rx) = mpsc::channel();
-    let tx1 = tx.clone();
+    let (sim_to_api_tx, sim_to_api_rx) = tokio::sync::mpsc::channel::<api::RunStat>(1);
+    let (api_to_sim_tx, api_to_sim_rx) = mpsc::channel::<usize>();
+    let (tx0, rx0) = mpsc::channel();
+    let tx1 = tx0.clone();
     thread::spawn(move || {
-        tx.send(run_simulation(simulation_simulator)).unwrap();
+        tx0.send(run_simulation(
+            simulation_simulator,
+            api_to_sim_rx,
+            sim_to_api_tx,
+        ))
+        .unwrap();
     });
-    thread::spawn(move || tx1.send(rt.block_on(run_api(api_simulator))).unwrap());
-    rx.recv().unwrap()
+    thread::spawn(move || {
+        tx1.send(rt.block_on(api::run_api(
+            api_simulator,
+            api_net,
+            api_to_sim_tx,
+            sim_to_api_rx,
+        )))
+        .unwrap()
+    });
+    rx0.recv().unwrap()
 }
 
-fn run_simulation(simulator: Arc<Mutex<Simulator>>) -> ExitCode {
-    let mut simulator = simulator.lock().unwrap();
-    let global_start = Instant::now();
-    while !simulator.is_end() {
-        let step_start = Instant::now();
-        if let Err(e) = simulator.tick() {
-            error!("Simulation step failed: {}", e);
-            break;
-        }
-        if simulator.step_current.is_multiple_of(CONFIG.log_interval) {
-            let global_time = global_start.elapsed();
-            let step_time = step_start.elapsed();
-            let simluation_elapsed = simulator.step_current * simulator.step;
-            info!(
-                "Progress: step={}, simulation_time={}ms, elapsed={}ms, step_time={}ms, avg_step_time={:.2}ms, complete={:.2}%, speed={:.2}x",
-                simulator.step_current,
-                simulator.time_begin + simluation_elapsed,
-                global_time.as_millis(),
-                step_time.as_millis(),
-                (global_time.as_millis() as f64) / (simulator.step_current as f64),
-                ((simluation_elapsed * 100) as f64)
-                    / ((simulator.time_end - simulator.time_begin) as f64),
-                (simluation_elapsed as f64) / (global_time.as_millis() as f64)
-            );
-            if !ARGS.baseline {
-                let (delay, loss) = simulator.v2x_stats();
-                info!(
-                    "V2X statistics: average_delay={:.2}ms, packet_loss={:.2}%",
-                    delay,
-                    loss * 100.0
-                );
+fn run_simulation(
+    simulator: Arc<Mutex<Simulator>>,
+    rx: Receiver<usize>,
+    tx: tokio::sync::mpsc::Sender<api::RunStat>,
+) -> ExitCode {
+    loop {
+        let setps = rx.recv().unwrap();
+        let start = Instant::now();
+        let mut simulator = simulator.lock().unwrap();
+        let start_step = simulator.step_current;
+        let mut simulate_duration = Duration::new(0, 0);
+        let mut script_duration = Duration::new(0, 0);
+        let mut sumo_duration = Duration::new(0, 0);
+        let mut global_duration = Duration::new(0, 0);
+        let mut ended = false;
+        for _ in 0..setps {
+            if simulator.is_end() {
+                ended = true;
+                break;
+            }
+            match simulator.tick() {
+                Ok((duration0, duration1, duration2, duration3)) => {
+                    simulate_duration += duration0;
+                    script_duration += duration1;
+                    sumo_duration += duration2;
+                    global_duration += duration3;
+                }
+                Err(e) => {
+                    error!("Simulation step failed: {}", e);
+                    break;
+                }
             }
         }
+        let time = start.elapsed();
+        let end_step = simulator.step_current;
+        info!(
+            "Progress: step {}-{}, simulation_time {}ms, elapsed {}ms, avg_step_time={:.2}ms, complete={:.2}%, speed={:.2}x",
+            start_step,
+            end_step,
+            (end_step - start_step) * simulator.step,
+            time.as_millis(),
+            if (simulator.time_end - simulator.time_begin) > 0 {
+                (time.as_millis() as f64) / ((end_step - start_step) as f64)
+            } else {
+                0.0
+            },
+            if (simulator.time_end - simulator.time_begin) > 0 {
+                ((end_step * simulator.step * 100) as f64)
+                    / ((simulator.time_end - simulator.time_begin) as f64)
+            } else {
+                100.0
+            },
+            (((end_step - start_step) * simulator.step) as f64) / (time.as_millis() as f64)
+        );
+        if !ARGS.baseline {
+            let (delay, loss) = simulator.v2x_stats();
+            info!(
+                "V2X statistics: average_delay={:.2}ms, packet_loss={:.2}%",
+                delay,
+                loss * 100.0
+            );
+        }
+        tx.try_send(api::RunStat {
+            start_step,
+            end_step,
+            completed_steps: end_step - start_step,
+            has_ended: ended,
+            simulated_duration_millis: simulate_duration.as_millis() as usize,
+            script_duration_millis: script_duration.as_millis() as usize,
+            sumo_duration_millis: sumo_duration.as_millis() as usize,
+            total_duration_millis: global_duration.as_millis() as usize,
+        })
+        .unwrap();
     }
-    if simulator.is_end() {
-        info!("Simulation completed successfully");
-        ExitCode::SUCCESS
-    } else {
-        error!("Simulation terminated before reaching the configured end time");
-        ExitCode::FAILURE
-    }
-}
-
-async fn run_api(simulator: Arc<Mutex<Simulator>>) -> ExitCode {
-    let lock = tokio::sync::Mutex::new(());
-    let app = Router::new().route("/status", routing::get(status));
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-
-    axum::serve(listener, app).await.unwrap();
-
-    ExitCode::SUCCESS
-}
-
-async fn status() -> &'static str {
-    "health"
 }

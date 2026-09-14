@@ -13,7 +13,7 @@ lazy_static! {
     pub static ref CONFIG: Config = get_conf();
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct Config {
     pub log_interval: usize,
     pub rsu_report_interval: usize,
@@ -53,7 +53,7 @@ impl Config {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct Sumo {
     pub sumocfg: PathBuf,
     pub threads: usize,

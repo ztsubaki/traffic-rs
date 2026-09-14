@@ -11,11 +11,14 @@ use pyo3::{
     wrap_pyfunction,
 };
 use rand_distr::Normal;
+use serde::Serialize;
+use std::time::Duration;
 use std::{
     collections::HashMap,
     ffi::{CStr, CString},
     str::FromStr,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use crate::net::Net;
@@ -61,7 +64,6 @@ impl Simulator {
         let time_begin = sumo.time_begin()?;
         let time_end = sumo.time_end()?;
         let step = sumo.step_length()?;
-        let edges = sumo.get_edges()?;
         if let Some(module) = module {
             let v2x = v2x::Channel::new(
                 match Normal::new(
@@ -200,15 +202,23 @@ impl Simulator {
     pub fn get_num_nodes(&self) -> usize {
         self.nodes.as_ref().map_or(0, |n| n.len())
     }
+    pub fn get_num_vehicles(&self) -> usize {
+        self.vehicles.len()
+    }
     pub fn is_end(&self) -> bool {
         self.time_begin + self.step * self.step_current >= self.time_end
     }
 
-    pub fn tick(&mut self) -> Result<(), String> {
+    pub fn tick(&mut self) -> Result<(Duration, Duration, Duration, Duration), String> {
+        let mut simulate_duration = Duration::new(0, 0);
+        let mut script_duration = Duration::new(0, 0);
+        let mut sumo_duration = Duration::new(0, 0);
+        let global_start = Instant::now();
         if self.is_end() {
             return Err(String::from_str("Simulation has already ended").unwrap());
         }
         let time = self.time_begin + self.step_current * self.step;
+        let simulate_start = Instant::now();
         let vehicles = match self.sumo.lock() {
             Ok(r) => r,
             Err(e) => {
@@ -216,12 +226,15 @@ impl Simulator {
             }
         }
         .get_vehicles()?;
+        simulate_duration += simulate_start.elapsed();
         trace!("Collected active vehicles: {}", vehicles.as_slice().len());
         if !self.baseline {
+            let simulate_start = Instant::now();
             for veh in vehicles.as_slice() {
                 let vehicle = self.update_vehicle(veh)?;
                 self.send_v2x(vehicle, time);
             }
+            simulate_duration += simulate_start.elapsed();
             if self.step_current.is_multiple_of(CONFIG.rsu_report_interval) {
                 self.rsu
                     .as_mut()
@@ -229,6 +242,7 @@ impl Simulator {
                     .report(self.v2x.as_mut().unwrap(), time);
             }
             trace!("V2X message queue length: {}", self.message_count());
+            let script_start = Instant::now();
             for id in 0..self.get_num_nodes() {
                 let tls_id = TrafficLightID::from_usize(id);
                 if let Some(sig) =
@@ -274,20 +288,30 @@ impl Simulator {
                     }
                 }
             }
+            script_duration += script_start.elapsed();
         } else {
+            let simulate_start = Instant::now();
             for veh in vehicles.as_slice() {
                 let _ = self.update_vehicle(veh)?;
             }
+            simulate_duration += simulate_start.elapsed();
         }
-        let vehicles = match self.sumo.lock() {
+        let sumo_start = Instant::now();
+        match self.sumo.lock() {
             Ok(r) => r,
             Err(e) => {
                 return Err(e.to_string());
             }
         }
         .step()?;
+        sumo_duration += sumo_start.elapsed();
         self.step_current += 1;
-        Ok(())
+        Ok((
+            simulate_duration,
+            script_duration,
+            sumo_duration,
+            global_start.elapsed(),
+        ))
     }
     pub fn send_v2x(&mut self, vehicle_id: VehicleID, time: usize) {
         let vehicle = self.get_vehicle(vehicle_id).unwrap();
@@ -322,7 +346,7 @@ impl Simulator {
         self.vehicle_ids.get(vehicle).copied()
     }
 
-    fn get_vehicle(&self, vehicle_id: VehicleID) -> Option<&Vehicle> {
+    pub fn get_vehicle(&self, vehicle_id: VehicleID) -> Option<&Vehicle> {
         if self.vehicles.len() > vehicle_id.to_usize() {
             Some(&self.vehicles[vehicle_id.to_usize()])
         } else {
@@ -407,24 +431,30 @@ impl PyNet {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 #[pyclass(frozen, skip_from_py_object)]
 pub struct Vehicle {
     #[pyo3(get)]
+    #[serde(rename = "currentLaneId")]
     pub lane: LaneID,
     #[pyo3(get)]
+    #[serde(rename = "lanePosition")]
     pub lane_position: f64,
     #[pyo3(get)]
     pub speed: f64,
     #[pyo3(get)]
     pub acceleration: f64,
     #[pyo3(get)]
+    #[serde(rename = "waitingTime")]
     pub waiting_time: f64,
     #[pyo3(get)]
+    #[serde(rename = "timeLoss")]
     pub time_loss: f64,
     #[pyo3(get)]
+    #[serde(rename = "nextTrafficLightId")]
     pub next_trafficlight: Option<TrafficLightID>,
     #[pyo3(get)]
+    #[serde(rename = "nextLinkIndex")]
     pub next_link_index: usize,
 }
 
@@ -432,7 +462,7 @@ pub struct Vehicle {
 pub struct VehicleID(usize);
 
 impl VehicleID {
-    fn from_usize(value: usize) -> Self {
+    pub fn from_usize(value: usize) -> Self {
         Self(value)
     }
 

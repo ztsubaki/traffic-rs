@@ -24,6 +24,17 @@ Use command below to begin simluation:
 traffic-rs -c ./conf.toml
 ```
 
+### HTTP API
+
+The server exposes a versioned JSON API at `/api/v1` and its OpenAPI 3.1 document at
+`/openapi.json`. Resource identifiers are path parameters, for example
+`GET /api/v1/traffic-lights/0`. JSON errors use `application/problem+json` and the
+RFC 9457 fields `type`, `title`, `status`, and `detail`.
+
+`GET /api/v1/simulation/run?steps=10` is the sole exception: it is a Server-Sent
+Events stream. It emits `accepted`, `completed`, or `failed` events; the completed
+event contains the run statistics.
+
 ### Python Plugin
 
 The traffic algorithm Python plugin defines class Node and Cloud, they can get data from PyNet object, which is a read only reference for Net, you can see `src/simulator/mod.rs` and `src/simulator/net.rs` for details.

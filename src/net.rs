@@ -1,4 +1,5 @@
 use pyo3::{Bound, FromPyObject, IntoPyObject, PyErr, pyclass};
+use serde::Serialize;
 use std::{
     collections::{HashMap, HashSet},
     ffi::{CStr, CString},
@@ -411,11 +412,11 @@ impl Net {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize)]
 pub struct EdgeID(usize);
 
 impl EdgeID {
-    fn from_usize(value: usize) -> Self {
+    pub fn from_usize(value: usize) -> Self {
         Self(value)
     }
 
@@ -442,11 +443,11 @@ impl FromPyObject<'_, '_> for EdgeID {
         Ok(Self(obj.extract::<usize>()?))
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize)]
 pub struct JunctionID(usize);
 
 impl JunctionID {
-    fn from_usize(value: usize) -> Self {
+    pub fn from_usize(value: usize) -> Self {
         Self(value)
     }
 
@@ -473,11 +474,11 @@ impl FromPyObject<'_, '_> for JunctionID {
         Ok(Self(obj.extract::<usize>()?))
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize)]
 pub struct LaneID(usize);
 
 impl LaneID {
-    fn from_usize(value: usize) -> Self {
+    pub fn from_usize(value: usize) -> Self {
         Self(value)
     }
 
@@ -503,7 +504,7 @@ impl FromPyObject<'_, '_> for LaneID {
         Ok(Self(obj.extract::<usize>()?))
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize)]
 pub struct TrafficLightID(usize);
 
 impl TrafficLightID {
@@ -535,7 +536,7 @@ impl FromPyObject<'_, '_> for TrafficLightID {
     }
 }
 
-#[derive(Clone)]
+#[derive(Serialize, Clone)]
 #[pyclass(frozen, skip_from_py_object)]
 pub struct Edge {
     #[pyo3(get)]
@@ -543,36 +544,41 @@ pub struct Edge {
     #[pyo3(get)]
     pub name: String,
     #[pyo3(get)]
+    #[serde(rename = "sourceJunctionId")]
     pub from: Option<JunctionID>,
     #[pyo3(get)]
+    #[serde(rename = "targetJunctionId")]
     pub to: Option<JunctionID>,
     #[pyo3(get)]
+    #[serde(rename = "laneCount")]
     pub lane_number: usize,
 }
 
-#[derive(Clone)]
+#[derive(Serialize, Clone)]
 #[pyclass(frozen, skip_from_py_object)]
 pub struct Junction {
     #[pyo3(get)]
     pub id: String,
 }
 
-#[derive(Clone)]
+#[derive(Serialize, Clone)]
 #[pyclass(frozen, skip_from_py_object)]
 pub struct Lane {
     #[pyo3(get)]
     pub id: String,
     #[pyo3(get)]
+    #[serde(rename = "edgeId")]
     pub edge_id: Option<EdgeID>,
     #[pyo3(get)]
     pub length: f64,
     #[pyo3(get)]
     pub links: Vec<Link>,
     #[pyo3(get)]
+    #[serde(rename = "trafficLightIds")]
     pub trafficlight: HashSet<TrafficLightID>,
 }
 
-#[derive(Clone)]
+#[derive(Serialize, Clone)]
 #[pyclass(frozen, skip_from_py_object)]
 pub struct TrafficLight {
     #[pyo3(get)]
@@ -584,22 +590,27 @@ pub struct TrafficLight {
 }
 
 #[pyclass(frozen, skip_from_py_object)]
-#[derive(Clone)]
+#[derive(Serialize, Clone)]
 pub struct Link {
     #[pyo3(get)]
+    #[serde(rename = "fromLaneId")]
     pub from: LaneID,
     #[pyo3(get)]
+    #[serde(rename = "viaLaneId")]
     pub via: Option<LaneID>,
     #[pyo3(get)]
+    #[serde(rename = "toLaneId")]
     pub to: LaneID,
 }
 
 #[pyclass(frozen, skip_from_py_object)]
-#[derive(Clone)]
+#[derive(Serialize, Clone)]
 pub struct Phase {
     #[pyo3(get)]
+    #[serde(rename = "signals")]
     pub sigs: Signals,
     #[pyo3(get)]
+    #[serde(rename = "nextPhaseIndices")]
     pub next: Vec<usize>,
 }
 
@@ -693,6 +704,15 @@ impl Signals {
     }
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
+    }
+}
+
+impl Serialize for Signals {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_str())
     }
 }
 
