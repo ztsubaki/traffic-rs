@@ -30,7 +30,7 @@ pub async fn run_api(
     simulator: Arc<Mutex<Simulator>>,
     net: Arc<Net>,
     tx: Sender<usize>,
-    rx: tokio::sync::mpsc::Receiver<RunStat>,
+    rx: tokio::sync::mpsc::Receiver<Result<RunStat, String>>,
 ) -> ExitCode {
     let sys = Arc::new(RwLock::new(System::new_all()));
     let state = ApiState {
@@ -58,18 +58,44 @@ pub async fn run_api(
         .nest(API_PREFIX, api)
         .fallback(not_found)
         .with_state(state);
-    let listener =
-        tokio::net::TcpListener::bind(SocketAddr::new(CONFIG.listen_addr, CONFIG.listen_port))
-            .await
-            .unwrap();
+    let listener = match tokio::net::TcpListener::bind(SocketAddr::new(
+        CONFIG.listen_addr,
+        CONFIG.listen_port,
+    ))
+    .await
+    {
+        Ok(listener) => listener,
+        Err(error) => {
+            log::error!(
+                "Failed to bind the API server to {}:{}: {}",
+                CONFIG.listen_addr,
+                CONFIG.listen_port,
+                error
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    let process_id = match get_current_pid() {
+        Ok(process_id) => process_id,
+        Err(error) => {
+            log::error!("Failed to determine the current process ID: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     tokio::spawn(async move {
         loop {
             {
-                let mut system = sys.write().unwrap();
+                let mut system = match sys.write() {
+                    Ok(system) => system,
+                    Err(error) => {
+                        log::error!("System metrics lock is poisoned: {error}");
+                        return;
+                    }
+                };
                 system.refresh_cpu_usage();
                 system.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram());
                 system.refresh_processes_specifics(
-                    sysinfo::ProcessesToUpdate::Some(&[get_current_pid().unwrap()]),
+                    sysinfo::ProcessesToUpdate::Some(&[process_id]),
                     true,
                     ProcessRefreshKind::nothing()
                         .with_cpu()
@@ -80,8 +106,13 @@ pub async fn run_api(
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     });
-    axum::serve(listener, app).await.unwrap();
-    ExitCode::SUCCESS
+    match axum::serve(listener, app).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            log::error!("API server terminated unexpectedly: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -91,7 +122,7 @@ struct ApiState {
     simulator: Arc<Mutex<Simulator>>,
     net: Arc<Net>,
     compute_tx: Sender<usize>,
-    compute_rx: Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<RunStat>>>,
+    compute_rx: Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Result<RunStat, String>>>>,
     sys: Arc<RwLock<System>>,
 }
 
@@ -131,6 +162,14 @@ impl ApiError {
             status: StatusCode::CONFLICT,
             type_url: "https://httpstatuses.com/409",
             title: "Simulation is running",
+            detail: detail.into(),
+        }
+    }
+    fn internal(detail: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            type_url: "https://httpstatuses.com/500",
+            title: "Internal server error",
             detail: detail.into(),
         }
     }
@@ -174,25 +213,34 @@ struct SystemStatus {
     process_memory_bytes: u64,
 }
 impl SystemStatus {
-    fn new(sys: &System) -> Self {
-        let process = sys.process(get_current_pid().unwrap()).unwrap();
-        Self {
+    fn snapshot(sys: &System) -> Result<Self, ApiError> {
+        let process_id = get_current_pid().map_err(|error| {
+            ApiError::internal(format!("Failed to determine the process ID: {error}"))
+        })?;
+        let process = sys.process(process_id).ok_or_else(|| {
+            ApiError::internal("Process metrics are not available yet. Try again shortly.")
+        })?;
+        Ok(Self {
             logical_cpu_count: sys.cpus().len(),
             process_cpu_percent: process.cpu_usage(),
             system_cpu_percent: sys.global_cpu_usage(),
             total_memory_bytes: sys.total_memory(),
             used_memory_bytes: sys.used_memory(),
             process_memory_bytes: process.memory(),
-        }
+        })
     }
 }
-async fn health(State(state): State<ApiState>) -> Json<HealthResponse> {
-    Json(HealthResponse {
+async fn health(State(state): State<ApiState>) -> Result<Json<HealthResponse>, ApiError> {
+    let system = state
+        .sys
+        .read()
+        .map_err(|error| ApiError::internal(format!("System metrics lock is poisoned: {error}")))?;
+    Ok(Json(HealthResponse {
         service: "traffic-rs",
         is_simulation_running: state.simulation_gate.try_read().is_err(),
         timestamp: Local::now().to_rfc3339(),
-        system: SystemStatus::new(&state.sys.read().unwrap()),
-    })
+        system: SystemStatus::snapshot(&system)?,
+    }))
 }
 
 #[derive(Serialize)]
@@ -303,7 +351,7 @@ async fn vehicle_statistics(
     })?;
     let _gate = state.gate.lock().await;
     Ok(Json(VehicleStatistics {
-        vehicle_count: state.simulator.lock().unwrap().get_num_vehicles(),
+        vehicle_count: state.simulator.lock().unwrap().vehicle_count(),
     }))
 }
 async fn vehicle(
@@ -387,23 +435,34 @@ async fn run_simulation(
                 })
                 .unwrap()))
             .await;
-        if let Some(run_stat) = state.compute_rx.lock().await.recv().await {
-            let _ = event_tx
-                .send(Ok(Event::default()
-                    .event("completed")
-                    .json_data(RunEvent::Completed(run_stat))
-                    .unwrap()))
-                .await;
-        } else {
-            let _ = event_tx
-                .send(Ok(Event::default()
-                    .event("failed")
-                    .json_data(RunEvent::Failed {
-                        detail: "The simulation worker closed before reporting completion."
-                            .to_owned(),
-                    })
-                    .unwrap()))
-                .await;
+        match state.compute_rx.lock().await.recv().await {
+            Some(Ok(run_stat)) => {
+                let _ = event_tx
+                    .send(Ok(Event::default()
+                        .event("completed")
+                        .json_data(RunEvent::Completed(run_stat))
+                        .unwrap()))
+                    .await;
+            }
+            Some(Err(detail)) => {
+                let _ = event_tx
+                    .send(Ok(Event::default()
+                        .event("failed")
+                        .json_data(RunEvent::Failed { detail })
+                        .unwrap()))
+                    .await;
+            }
+            None => {
+                let _ = event_tx
+                    .send(Ok(Event::default()
+                        .event("failed")
+                        .json_data(RunEvent::Failed {
+                            detail: "The simulation worker closed before reporting completion."
+                                .to_owned(),
+                        })
+                        .unwrap()))
+                    .await;
+            }
         }
     });
     Ok(Sse::new(ReceiverStream::new(event_rx)))

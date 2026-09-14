@@ -10,7 +10,7 @@ use std::str::FromStr;
 use crate::ARGS;
 
 lazy_static! {
-    pub static ref CONFIG: Config = get_conf();
+    pub static ref CONFIG: Config = load_config();
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -22,7 +22,7 @@ pub struct Config {
     pub rsu_delay_k: f64,
     pub cloud_delay_mean: usize,
     pub cloud_delay_std_dev: usize,
-    pub cloud_package_loss_rate: f64,
+    pub cloud_packet_loss_rate: f64,
     pub output_dir: PathBuf,
     pub script: PathBuf,
     pub listen_addr: IpAddr,
@@ -40,7 +40,7 @@ impl Config {
             rsu_delay_k: 100.0,
             cloud_delay_mean: 20,
             cloud_delay_std_dev: 10,
-            cloud_package_loss_rate: 0.001,
+            cloud_packet_loss_rate: 0.001,
             output_dir: PathBuf::from_str("output").unwrap(),
             script: PathBuf::from_str("plugin.py").unwrap(),
             listen_addr: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
@@ -59,34 +59,34 @@ pub struct Sumo {
     pub threads: usize,
 }
 
-fn get_conf() -> Config {
+fn load_config() -> Config {
     match &ARGS.config {
         Some(path) => {
             let file = match fs::File::open(path) {
-                Ok(f) => f,
-                Err(e) => {
+                Ok(file) => file,
+                Err(error) => {
                     log::error!(
                         "Failed to open configuration file {}: {}",
                         path.display(),
-                        e
+                        error
                     );
                     exit(1);
                 }
             };
-            let mut file_limited = file.take(10241);
+            let mut limited_file = file.take(10_241);
             let mut buffer = Vec::new();
-            match file_limited.read_to_end(&mut buffer) {
+            match limited_file.read_to_end(&mut buffer) {
                 Ok(_) => {}
-                Err(e) => {
+                Err(error) => {
                     log::error!(
                         "Failed to read configuration file {}: {}",
                         path.display(),
-                        e
+                        error
                     );
                     exit(1);
                 }
             };
-            if buffer.len() > 10240 {
+            if buffer.len() > 10_240 {
                 log::error!(
                     "Configuration file exceeds the 10 KiB size limit: {}",
                     path.display()
@@ -96,11 +96,11 @@ fn get_conf() -> Config {
             match String::from_utf8(buffer) {
                 Ok(str) => match toml::from_str(&str) {
                     Ok(config) => config,
-                    Err(e) => {
+                    Err(error) => {
                         log::error!(
                             "Failed to parse configuration file {}: {}",
                             path.display(),
-                            e
+                            error
                         );
                         exit(1);
                     }
@@ -115,26 +115,36 @@ fn get_conf() -> Config {
             log::warn!("No configuration file was provided; creating a default configuration");
             let mut file = match fs::File::create_new("conf.toml") {
                 Ok(f) => f,
-                Err(e) => {
-                    match e.kind() {
+                Err(error) => {
+                    match error.kind() {
                         io::ErrorKind::AlreadyExists => {
                             log::error!(
                                 "Default configuration file already exists; specify it with --config conf.toml"
                             );
                         }
                         _ => {
-                            log::error!("Failed to create the default configuration file: {}", e);
+                            log::error!(
+                                "Failed to create the default configuration file: {}",
+                                error
+                            );
                         }
                     };
                     exit(1);
                 }
             };
-            match file.write_all(toml::to_string(&Config::default()).unwrap().as_bytes()) {
+            let default_config = match toml::to_string(&Config::default()) {
+                Ok(config) => config,
+                Err(error) => {
+                    log::error!("Failed to serialize the default configuration: {}", error);
+                    exit(1);
+                }
+            };
+            match file.write_all(default_config.as_bytes()) {
                 Ok(_) => {
                     exit(0);
                 }
-                Err(e) => {
-                    log::error!("Failed to write the default configuration file: {}", e);
+                Err(error) => {
+                    log::error!("Failed to write the default configuration file: {}", error);
                     exit(1);
                 }
             };

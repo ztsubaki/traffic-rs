@@ -16,7 +16,6 @@ use std::time::Duration;
 use std::{
     collections::HashMap,
     ffi::{CStr, CString},
-    str::FromStr,
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -199,10 +198,10 @@ impl Simulator {
         })
     }
 
-    pub fn get_num_nodes(&self) -> usize {
-        self.nodes.as_ref().map_or(0, |n| n.len())
+    pub fn node_count(&self) -> usize {
+        self.nodes.as_ref().map_or(0, Vec::len)
     }
-    pub fn get_num_vehicles(&self) -> usize {
+    pub fn vehicle_count(&self) -> usize {
         self.vehicles.len()
     }
     pub fn is_end(&self) -> bool {
@@ -215,7 +214,7 @@ impl Simulator {
         let mut sumo_duration = Duration::new(0, 0);
         let global_start = Instant::now();
         if self.is_end() {
-            return Err(String::from_str("Simulation has already ended").unwrap());
+            return Err("The simulation has already ended.".to_owned());
         }
         let time = self.time_begin + self.step_current * self.step;
         let simulate_start = Instant::now();
@@ -230,8 +229,8 @@ impl Simulator {
         trace!("Collected active vehicles: {}", vehicles.as_slice().len());
         if !self.baseline {
             let simulate_start = Instant::now();
-            for veh in vehicles.as_slice() {
-                let vehicle = self.update_vehicle(veh)?;
+            for sumo_vehicle in vehicles.as_slice() {
+                let vehicle = self.update_vehicle(sumo_vehicle)?;
                 self.send_v2x(vehicle, time);
             }
             simulate_duration += simulate_start.elapsed();
@@ -243,12 +242,12 @@ impl Simulator {
             }
             trace!("V2X message queue length: {}", self.message_count());
             let script_start = Instant::now();
-            for id in 0..self.get_num_nodes() {
-                let tls_id = TrafficLightID::from_usize(id);
-                if let Some(sig) =
-                    self.nodes.as_mut().unwrap()[id].on_tick(time, self.v2x.as_mut().unwrap())?
+            for node_index in 0..self.node_count() {
+                let traffic_light_id = TrafficLightID::from_usize(node_index);
+                if let Some(signal_state) = self.nodes.as_mut().unwrap()[node_index]
+                    .on_tick(time, self.v2x.as_mut().unwrap())?
                 {
-                    self.set_trafficlights(&sig, tls_id);
+                    self.set_traffic_light(&signal_state, traffic_light_id);
                 };
             }
             self.cloud
@@ -266,33 +265,36 @@ impl Simulator {
                             .unwrap()
                             .on_message(msg, self.v2x.as_mut().unwrap())?;
                     }
-                    Communicator::Node(tls_id) => {
-                        if self.get_num_nodes() <= tls_id.to_usize() {
+                    Communicator::Node(traffic_light_id) => {
+                        if self.node_count() <= traffic_light_id.to_usize() {
                             warn!(
                                 "Dropping V2X message addressed to unknown node: {:?}",
-                                tls_id
+                                traffic_light_id
                             );
                             continue;
                         }
-                        if let Some(sig) = self.nodes.as_mut().unwrap()[tls_id.to_usize()]
-                            .on_message(msg, self.v2x.as_mut().unwrap())?
+                        if let Some(signal_state) = self.nodes.as_mut().unwrap()
+                            [traffic_light_id.to_usize()]
+                        .on_message(msg, self.v2x.as_mut().unwrap())?
                         {
-                            self.set_trafficlights(&sig, tls_id);
+                            self.set_traffic_light(&signal_state, traffic_light_id);
                         };
                     }
                     Communicator::RSU(_) => {
-                        self.rsu.as_mut().unwrap().on_message(msg);
+                        self.rsu.as_mut().unwrap().on_message(msg)?;
                     }
-                    Communicator::Vehicle(_) => {
-                        unreachable!("Can not send message to vehicle in current version");
+                    Communicator::Vehicle(vehicle_id) => {
+                        return Err(format!(
+                            "V2X delivery to vehicle {vehicle_id:?} is not supported."
+                        ));
                     }
                 }
             }
             script_duration += script_start.elapsed();
         } else {
             let simulate_start = Instant::now();
-            for veh in vehicles.as_slice() {
-                let _ = self.update_vehicle(veh)?;
+            for sumo_vehicle in vehicles.as_slice() {
+                self.update_vehicle(sumo_vehicle)?;
             }
             simulate_duration += simulate_start.elapsed();
         }
@@ -319,13 +321,13 @@ impl Simulator {
 
         let ctx = Python::attach(|py| Py::new(py, vehicle.clone()).unwrap().into_any());
 
-        for tls_id in &lane.trafficlight {
+        for traffic_light_id in &lane.traffic_light_ids {
             let ctx_ref = Python::attach(|py| ctx.clone_ref(py));
             Message::new(
                 self.v2x.as_mut().unwrap(),
                 ctx_ref,
                 Communicator::Vehicle(vehicle_id),
-                Communicator::RSU(*tls_id),
+                Communicator::RSU(*traffic_light_id),
                 time,
             );
         }
@@ -338,7 +340,7 @@ impl Simulator {
     pub fn v2x_stats(&self) -> (f64, f64) {
         (
             self.v2x.as_ref().unwrap().get_average_delay(),
-            self.v2x.as_ref().unwrap().get_package_loss(),
+            self.v2x.as_ref().unwrap().packet_loss_rate(),
         )
     }
 
@@ -362,31 +364,31 @@ impl Simulator {
         }
     }
 
-    fn set_trafficlights(&self, sig: &Signals, trafficlight_id: TrafficLightID) {
+    fn set_traffic_light(&self, signal_state: &Signals, traffic_light_id: TrafficLightID) {
         let sumo = self.sumo.lock().unwrap();
-        if let Some(tls) = self.net.get_trafficlight(trafficlight_id) {
-            let sig = sig.to_str();
-            if sig.len() == tls.links.len() {
-                if let Err(e) = sumo.set_trafficlight(&tls.id, &sig) {
+        if let Some(traffic_light) = self.net.get_trafficlight(traffic_light_id) {
+            let signal_state = signal_state.to_str();
+            if signal_state.len() == traffic_light.links.len() {
+                if let Err(error) = sumo.set_trafficlight(&traffic_light.id, &signal_state) {
                     log::warn!(
                         "Failed to set traffic light {} to state {}: {}",
-                        tls.id,
-                        sig,
-                        e
+                        traffic_light.id,
+                        signal_state,
+                        error
                     );
                 };
             } else {
                 log::warn!(
                     "Rejected traffic light state for {}: received_length={}, expected_length={}",
-                    tls.id,
-                    sig.len(),
-                    tls.links.len()
+                    traffic_light.id,
+                    signal_state.len(),
+                    traffic_light.links.len()
                 );
             }
         } else {
             warn!(
                 "Traffic light ID does not exist in the road network: {:?}",
-                trafficlight_id
+                traffic_light_id
             );
         }
     }

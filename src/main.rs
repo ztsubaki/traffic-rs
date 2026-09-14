@@ -51,35 +51,45 @@ fn main() -> ExitCode {
 
     lazy_static::initialize(&CONFIG);
 
-    if !(CONFIG.cloud_package_loss_rate >= 0.0 && CONFIG.cloud_package_loss_rate < 1.0) {
+    if !(CONFIG.cloud_packet_loss_rate >= 0.0 && CONFIG.cloud_packet_loss_rate < 1.0) {
         error!(
             "Invalid cloud packet loss rate: value={} must be in [0.0, 1.0)",
-            CONFIG.cloud_package_loss_rate
+            CONFIG.cloud_packet_loss_rate
         );
         return ExitCode::FAILURE;
     }
 
     info!("Initializing SUMO");
 
-    let pwd = match env::current_dir() {
-        Ok(p) => p,
-        Err(e) => {
-            error!("Failed to determine the current working directory: {}", e);
+    let working_directory = match env::current_dir() {
+        Ok(path) => path,
+        Err(error) => {
+            error!(
+                "Failed to determine the current working directory: {}",
+                error
+            );
             return ExitCode::FAILURE;
         }
     };
-    let cfg_dir = pwd.join(match ARGS.config.as_ref().unwrap().parent() {
+    let config_path = match ARGS.config.as_ref() {
+        Some(path) => path,
+        None => {
+            error!("No configuration file was specified.");
+            return ExitCode::FAILURE;
+        }
+    };
+    let config_directory = working_directory.join(match config_path.parent() {
         Some(p) => p,
         None => {
             error!(
                 "Configuration path has no parent directory: {}",
-                ARGS.config.clone().unwrap().display()
+                config_path.display()
             );
             return ExitCode::FAILURE;
         }
     });
 
-    let output_dir = cfg_dir.join(&CONFIG.output_dir);
+    let output_dir = config_directory.join(&CONFIG.output_dir);
     if output_dir.exists() {
         if !output_dir.is_dir() {
             error!("Output path is not a directory: {}", output_dir.display());
@@ -106,9 +116,9 @@ fn main() -> ExitCode {
 
     info!("Using output directory: {}", output_dir.display());
 
-    let sumocfg = cfg_dir.join(&CONFIG.sumo.sumocfg);
+    let sumo_config_path = config_directory.join(&CONFIG.sumo.sumocfg);
 
-    match sumocfg.parent() {
+    match sumo_config_path.parent() {
         Some(path) => {
             if path.is_dir() {
                 if let Err(e) = env::set_current_dir(path) {
@@ -130,20 +140,20 @@ fn main() -> ExitCode {
         None => {
             error!(
                 "SUMO configuration path has no parent directory: {}",
-                sumocfg.display()
+                sumo_config_path.display()
             );
             return ExitCode::FAILURE;
         }
     }
 
-    if !sumocfg.exists() || !sumocfg.is_file() {
+    if !sumo_config_path.exists() || !sumo_config_path.is_file() {
         error!(
             "SUMO configuration file does not exist or is not a regular file: {}",
-            sumocfg.display()
+            sumo_config_path.display()
         );
         return ExitCode::FAILURE;
     }
-    let sumo = match Sumo::load(&sumocfg, CONFIG.sumo.threads, &output_dir) {
+    let sumo = match Sumo::load(&sumo_config_path, CONFIG.sumo.threads, &output_dir) {
         Ok(sumo) => sumo,
         Err(e) => {
             error!("Failed to initialize SUMO: {}", e);
@@ -156,11 +166,11 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    if let Err(e) = env::set_current_dir(pwd.clone()) {
+    if let Err(error) = env::set_current_dir(working_directory.clone()) {
         error!(
             "Failed to restore the working directory to {}: {}",
-            pwd.display(),
-            e
+            working_directory.display(),
+            error
         );
         return ExitCode::FAILURE;
     }
@@ -201,7 +211,7 @@ trafficrs.hello_world()
         }
 
         info!("Python runtime initialized");
-        let script = cfg_dir.join(&CONFIG.script);
+        let script = config_directory.join(&CONFIG.script);
 
         if !script.exists() {
             error!("Plugin script does not exist: {}", script.display());
@@ -253,9 +263,9 @@ trafficrs.hello_world()
         info!("Running in baseline mode without the V2X plugin");
         Simulator::init(sumo, None, simulation_net)
     } {
-        Ok(sim) => sim,
-        Err(e) => {
-            error!("Failed to initialize the simulation: {}", e);
+        Ok(simulator) => simulator,
+        Err(error) => {
+            error!("Failed to initialize the simulation: {}", error);
             return ExitCode::FAILURE;
         }
     };
@@ -266,49 +276,81 @@ trafficrs.hello_world()
         .worker_threads(2)
         .enable_all()
         .build()
-        .unwrap();
+        .map_err(|error| {
+            error!("Failed to create the asynchronous runtime: {error}");
+            ExitCode::FAILURE
+        });
+    let rt = match rt {
+        Ok(runtime) => runtime,
+        Err(exit_code) => return exit_code,
+    };
     let simulation_simulator = Arc::new(Mutex::new(simulator));
     let api_simulator = simulation_simulator.clone();
-    let (sim_to_api_tx, sim_to_api_rx) = tokio::sync::mpsc::channel::<api::RunStat>(1);
+    let (sim_to_api_tx, sim_to_api_rx) =
+        tokio::sync::mpsc::channel::<Result<api::RunStat, String>>(1);
     let (api_to_sim_tx, api_to_sim_rx) = mpsc::channel::<usize>();
     let (tx0, rx0) = mpsc::channel();
     let tx1 = tx0.clone();
     thread::spawn(move || {
-        tx0.send(run_simulation(
-            simulation_simulator,
-            api_to_sim_rx,
-            sim_to_api_tx,
-        ))
-        .unwrap();
+        if tx0
+            .send(run_simulation(
+                simulation_simulator,
+                api_to_sim_rx,
+                sim_to_api_tx,
+            ))
+            .is_err()
+        {
+            error!("Simulation worker exited after its result receiver was dropped.");
+        }
     });
     thread::spawn(move || {
-        tx1.send(rt.block_on(api::run_api(
-            api_simulator,
-            api_net,
-            api_to_sim_tx,
-            sim_to_api_rx,
-        )))
-        .unwrap()
+        if tx1
+            .send(rt.block_on(api::run_api(
+                api_simulator,
+                api_net,
+                api_to_sim_tx,
+                sim_to_api_rx,
+            )))
+            .is_err()
+        {
+            error!("API server exited after its result receiver was dropped.");
+        }
     });
-    rx0.recv().unwrap()
+    match rx0.recv() {
+        Ok(exit_code) => exit_code,
+        Err(error) => {
+            error!("Both service workers exited without reporting a result: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn run_simulation(
     simulator: Arc<Mutex<Simulator>>,
     rx: Receiver<usize>,
-    tx: tokio::sync::mpsc::Sender<api::RunStat>,
+    tx: tokio::sync::mpsc::Sender<Result<api::RunStat, String>>,
 ) -> ExitCode {
     loop {
-        let setps = rx.recv().unwrap();
+        let requested_steps = match rx.recv() {
+            Ok(steps) => steps,
+            Err(_) => return ExitCode::SUCCESS,
+        };
         let start = Instant::now();
-        let mut simulator = simulator.lock().unwrap();
+        let mut simulator = match simulator.lock() {
+            Ok(simulator) => simulator,
+            Err(error) => {
+                error!("Simulation state lock is poisoned: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
         let start_step = simulator.step_current;
         let mut simulate_duration = Duration::new(0, 0);
         let mut script_duration = Duration::new(0, 0);
         let mut sumo_duration = Duration::new(0, 0);
         let mut global_duration = Duration::new(0, 0);
         let mut ended = false;
-        for _ in 0..setps {
+        let mut run_error = None;
+        for _ in 0..requested_steps {
             if simulator.is_end() {
                 ended = true;
                 break;
@@ -320,8 +362,15 @@ fn run_simulation(
                     sumo_duration += duration2;
                     global_duration += duration3;
                 }
-                Err(e) => {
-                    error!("Simulation step failed: {}", e);
+                Err(error) => {
+                    let detail = format!(
+                        "Simulation failed at step {} after completing {} step(s): {}",
+                        simulator.step_current,
+                        simulator.step_current - start_step,
+                        error
+                    );
+                    error!("{detail}");
+                    run_error = Some(detail);
                     break;
                 }
             }
@@ -334,7 +383,7 @@ fn run_simulation(
             end_step,
             (end_step - start_step) * simulator.step,
             time.as_millis(),
-            if (simulator.time_end - simulator.time_begin) > 0 {
+            if end_step > start_step {
                 (time.as_millis() as f64) / ((end_step - start_step) as f64)
             } else {
                 0.0
@@ -345,7 +394,11 @@ fn run_simulation(
             } else {
                 100.0
             },
-            (((end_step - start_step) * simulator.step) as f64) / (time.as_millis() as f64)
+            if time.is_zero() {
+                0.0
+            } else {
+                (((end_step - start_step) * simulator.step) as f64) / (time.as_millis() as f64)
+            }
         );
         if !ARGS.baseline {
             let (delay, loss) = simulator.v2x_stats();
@@ -355,16 +408,21 @@ fn run_simulation(
                 loss * 100.0
             );
         }
-        tx.try_send(api::RunStat {
-            start_step,
-            end_step,
-            completed_steps: end_step - start_step,
-            has_ended: ended,
-            simulated_duration_millis: simulate_duration.as_millis() as usize,
-            script_duration_millis: script_duration.as_millis() as usize,
-            sumo_duration_millis: sumo_duration.as_millis() as usize,
-            total_duration_millis: global_duration.as_millis() as usize,
-        })
-        .unwrap();
+        let result = match run_error {
+            Some(detail) => Err(detail),
+            None => Ok(api::RunStat {
+                start_step,
+                end_step,
+                completed_steps: end_step - start_step,
+                has_ended: ended,
+                simulated_duration_millis: simulate_duration.as_millis() as usize,
+                script_duration_millis: script_duration.as_millis() as usize,
+                sumo_duration_millis: sumo_duration.as_millis() as usize,
+                total_duration_millis: global_duration.as_millis() as usize,
+            }),
+        };
+        if tx.try_send(result).is_err() {
+            warn!("The API server is unavailable; discarding simulation run statistics.");
+        }
     }
 }

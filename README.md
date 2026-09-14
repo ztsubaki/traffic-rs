@@ -37,8 +37,8 @@ event contains the run statistics.
 
 ### Python Plugin
 
-The traffic algorithm Python plugin defines class Node and Cloud, they can get data from PyNet object, which is a read only reference for Net, you can see `src/simulator/mod.rs` and `src/simulator/net.rs` for details.
+The traffic-control Python plugin defines the `Node` and `Cloud` classes. Both receive a `PyNet` object, which is a read-only view of the road network; see `src/simulator/mod.rs` and `src/net.rs` for details.
 
-The plugin cloud apply V2X communications between Node and Cloud, nodes will receive vehicles data from RSU every interval you configured.
+The plugin Cloud handles V2X communication between Nodes and the Cloud. Nodes receive vehicle data from RSUs at the configured reporting interval.
 
-A example plugin generate by LLM is in `examples/plugin.py`.
+An example plugin is available at `examples/plugin.py`.

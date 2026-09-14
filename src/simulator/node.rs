@@ -1,4 +1,6 @@
-use pyo3::{Py, PyAny, Python, pyclass, pymethods, types::PyAnyMethods};
+use pyo3::{
+    Py, PyAny, Python, exceptions::PyRuntimeError, pyclass, pymethods, types::PyAnyMethods,
+};
 
 use crate::{
     net::{Signals, TrafficLightID},
@@ -29,7 +31,7 @@ impl Node {
         }) {
             return Err(format!("Python Node on_tick callback failed: {}", e));
         }
-        Ok(self.post_hook(time, v2x))
+        self.post_hook(time, v2x)
     }
     pub fn on_message(
         &mut self,
@@ -57,7 +59,7 @@ impl Node {
         }) {
             return Err(format!("Python Node on_message callback failed: {}", e));
         }
-        Ok(self.post_hook(msg.time_arrive, v2x))
+        self.post_hook(msg.time_arrive, v2x)
     }
     pub fn on_create(&mut self) -> Result<(), String> {
         if let Err(e) = Python::attach(|py| self.obj.bind(py).call_method0("on_create").map(|_| {}))
@@ -66,13 +68,18 @@ impl Node {
         }
         Ok(())
     }
-    fn post_hook(&mut self, time: usize, v2x: &mut Channel) -> Option<Signals> {
+    fn post_hook(&mut self, time: usize, v2x: &mut Channel) -> Result<Option<Signals>, String> {
         Python::attach(|py| {
-            let mut obj = self.obj.bind(py).cast::<NodeBase>().unwrap().borrow_mut();
+            let node_base = self
+                .obj
+                .bind(py)
+                .cast::<NodeBase>()
+                .map_err(|error| format!("Python Node must inherit from NodeBase: {error}"))?;
+            let mut obj = node_base.borrow_mut();
             for message in obj.get_messages() {
                 Message::new(v2x, message.content, message.from, message.to, time);
             }
-            obj.get_action()
+            Ok(obj.get_action())
         })
     }
 }
@@ -99,8 +106,8 @@ impl NodeBase {
         }
     }
 
-    fn on_tick(&self, _time: usize) {
-        panic!("on_tick for Node not override");
+    fn on_tick(&self, _time: usize) -> pyo3::PyResult<()> {
+        Err(PyRuntimeError::new_err("Node.on_tick must be overridden."))
     }
 
     fn on_message(
@@ -109,12 +116,16 @@ impl NodeBase {
         _time_receive: usize,
         _from: Option<TrafficLightID>,
         _content: Py<PyAny>,
-    ) {
-        panic!("on_message for Node not override");
+    ) -> pyo3::PyResult<()> {
+        Err(PyRuntimeError::new_err(
+            "Node.on_message must be overridden.",
+        ))
     }
 
-    fn on_create(&self) {
-        panic!("on_create for Node not override");
+    fn on_create(&self) -> pyo3::PyResult<()> {
+        Err(PyRuntimeError::new_err(
+            "Node.on_create must be overridden.",
+        ))
     }
 
     fn send_to_cloud(&mut self, content: Py<PyAny>) {

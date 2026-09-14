@@ -2,7 +2,6 @@ use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_double, c_void};
 use std::marker::PhantomData;
 use std::path::Path;
-use std::str::FromStr;
 
 pub struct Sumo {
     _not_thread_sync: PhantomData<Cell<()>>,
@@ -209,28 +208,28 @@ const BRIDGE_SUMO_EXCEPTION: usize = 1;
 const BRIDGE_MALLOC_FAILED: usize = 2;
 
 impl Sumo {
-    pub fn load(sumocfg: &Path, thread: usize, output: &Path) -> Result<Sumo, String> {
-        if thread < 1 {
+    pub fn load(
+        sumo_config_path: &Path,
+        thread_count: usize,
+        output_directory: &Path,
+    ) -> Result<Sumo, String> {
+        if thread_count < 1 {
             return Err("SUMO thread count must be at least 1".to_string());
         }
-        let statics = output.join("./statics.xml");
-        let tripinfo = output.join("./tripinfo.xml");
-        let edgedata = output.join("./edgedata.xml");
-        match resolve_c_result_no_paylod(unsafe {
+        let statics = output_directory.join("statics.xml");
+        let tripinfo = output_directory.join("tripinfo.xml");
+        let edgedata = output_directory.join("edgedata.xml");
+        let sumo_config = path_to_c_string(sumo_config_path, "SUMO configuration path")?;
+        let statics_path = path_to_c_string(&statics, "SUMO statistics output path")?;
+        let tripinfo_path = path_to_c_string(&tripinfo, "SUMO trip information output path")?;
+        let edgedata_path = path_to_c_string(&edgedata, "SUMO edge data output path")?;
+        match resolve_c_result_no_payload(unsafe {
             sumo_load(
-                CString::from_str(sumocfg.to_str().unwrap())
-                    .unwrap()
-                    .as_ptr(),
-                thread,
-                CString::from_str(statics.to_str().unwrap())
-                    .unwrap()
-                    .as_ptr(),
-                CString::from_str(tripinfo.to_str().unwrap())
-                    .unwrap()
-                    .as_ptr(),
-                CString::from_str(edgedata.to_str().unwrap())
-                    .unwrap()
-                    .as_ptr(),
+                sumo_config.as_ptr(),
+                thread_count,
+                statics_path.as_ptr(),
+                tripinfo_path.as_ptr(),
+                edgedata_path.as_ptr(),
             )
         }) {
             Err(e) => Err(e),
@@ -272,10 +271,10 @@ impl Sumo {
         self.get_option("route-files")
     }
     pub fn step(&self) -> Result<(), String> {
-        resolve_c_result_no_paylod(unsafe { sumo_step() })
+        resolve_c_result_no_payload(unsafe { sumo_step() })
     }
     fn close(&mut self) -> Result<(), String> {
-        resolve_c_result_no_paylod(unsafe { sumo_close() })
+        resolve_c_result_no_payload(unsafe { sumo_close() })
     }
     pub fn get_edges(&self) -> Result<CVec<Edge>, String> {
         resolve_c_result_with_vec_payload(unsafe { get_edges() })
@@ -299,12 +298,11 @@ impl Sumo {
         resolve_c_result_with_vec_payload(unsafe { get_phases() })
     }
     #[allow(unused)]
-    fn get_parameter(&self, obj: &str, para: &str) -> Result<String, String> {
+    fn get_parameter(&self, object: &str, parameter: &str) -> Result<String, String> {
+        let object = to_c_string(object, "SUMO parameter object")?;
+        let parameter = to_c_string(parameter, "SUMO parameter name")?;
         match resolve_c_result_with_payload(unsafe {
-            get_parameter(
-                CString::new(obj).unwrap().as_ptr(),
-                CString::new(para).unwrap().as_ptr(),
-            )
+            get_parameter(object.as_ptr(), parameter.as_ptr())
         }) {
             Ok(payload) => {
                 let r: String = unsafe { CStr::from_ptr(payload as *const i8) }
@@ -322,10 +320,9 @@ impl Sumo {
             Err(e) => Err(e),
         }
     }
-    fn get_option(&self, opt: &str) -> Result<String, String> {
-        match resolve_c_result_with_payload(unsafe {
-            get_option(CString::new(opt).unwrap().as_ptr())
-        }) {
+    fn get_option(&self, option: &str) -> Result<String, String> {
+        let option = to_c_string(option, "SUMO option name")?;
+        match resolve_c_result_with_payload(unsafe { get_option(option.as_ptr()) }) {
             Ok(payload) => {
                 let r: String = unsafe { CStr::from_ptr(payload as *const i8) }
                     .to_string_lossy()
@@ -343,16 +340,27 @@ impl Sumo {
         }
     }
     pub fn set_trafficlight(&self, trafficlight_id: &str, state: &str) -> Result<(), String> {
-        resolve_c_result_no_paylod(unsafe {
-            set_trafficlight(
-                CString::new(trafficlight_id).unwrap().as_ptr(),
-                CString::new(state).unwrap().as_ptr(),
-            )
+        let trafficlight_id = to_c_string(trafficlight_id, "traffic light ID")?;
+        let state = to_c_string(state, "traffic light state")?;
+        resolve_c_result_no_payload(unsafe {
+            set_trafficlight(trafficlight_id.as_ptr(), state.as_ptr())
         })
     }
 }
 
-fn resolve_c_result_no_paylod(value: Payload) -> Result<(), String> {
+fn path_to_c_string(path: &Path, description: &str) -> Result<CString, String> {
+    let path = path
+        .to_str()
+        .ok_or_else(|| format!("{description} is not valid UTF-8: {}", path.display()))?;
+    to_c_string(path, description)
+}
+
+fn to_c_string(value: &str, description: &str) -> Result<CString, String> {
+    CString::new(value)
+        .map_err(|error| format!("{description} contains an embedded null byte: {error}"))
+}
+
+fn resolve_c_result_no_payload(value: Payload) -> Result<(), String> {
     match value.status {
         BRIDGE_SUCCESS => Ok(()),
         BRIDGE_MALLOC_FAILED => Err("SUMO bridge memory allocation failed".to_string()),

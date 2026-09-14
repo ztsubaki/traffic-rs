@@ -29,24 +29,27 @@ class Node(trafficrs.NodeBase):
             "traffic_light_id": traffic_light.id,
             "link_groups": len(traffic_light.links),
             "phase_programs": len(traffic_light.phases),
-            "phase_state": phase.sigs if phase else None,
-            "phase_next": phase.next if phase else [],
+            "phase_state": phase.signal_state if phase else None,
+            "phase_next": phase.next_phase_indices if phase else [],
         }
 
         if link:
-            from_lane_id = getattr(link, "from")
-            from_lane = self.net.get_lane(from_lane_id)
-            via_lane = self.net.get_lane(link.via) if link.via is not None else None
-            to_lane = self.net.get_lane(link.to)
+            source_lane = self.net.get_lane(link.source_lane_id)
+            via_lane = (
+                self.net.get_lane(link.via_lane_id)
+                if link.via_lane_id is not None
+                else None
+            )
+            target_lane = self.net.get_lane(link.target_lane_id)
             summary["link"] = {
-                "from": from_lane_id,
-                "via": link.via,
-                "to": link.to,
+                "source_lane_id": link.source_lane_id,
+                "via_lane_id": link.via_lane_id,
+                "target_lane_id": link.target_lane_id,
             }
             summary["lanes"] = {
-                "from": self._lane_summary(from_lane),
+                "source": self._lane_summary(source_lane),
                 "via": self._lane_summary(via_lane),
-                "to": self._lane_summary(to_lane),
+                "target": self._lane_summary(target_lane),
             }
 
         print(f"Node initialized: {summary}")
@@ -119,15 +122,14 @@ class Node(trafficrs.NodeBase):
             return None
 
         edge = self.net.get_edge(lane.edge_id) if lane.edge_id is not None else None
-        edge_from = getattr(edge, "from") if edge is not None else None
         from_junction = (
-            self.net.get_junction(edge_from)
-            if edge_from is not None
+            self.net.get_junction(edge.source_junction_id)
+            if edge is not None and edge.source_junction_id is not None
             else None
         )
         to_junction = (
-            self.net.get_junction(edge.to)
-            if edge is not None and edge.to is not None
+            self.net.get_junction(edge.target_junction_id)
+            if edge is not None and edge.target_junction_id is not None
             else None
         )
         return {
@@ -135,15 +137,15 @@ class Node(trafficrs.NodeBase):
             "edge_id": lane.edge_id,
             "length": lane.length,
             "outgoing_links": len(lane.links),
-            "traffic_lights": sorted(lane.trafficlight),
+            "traffic_lights": sorted(lane.traffic_light_ids),
             "edge": None
             if edge is None
             else {
                 "id": edge.id,
                 "name": edge.name,
-                "from": edge_from,
-                "to": edge.to,
-                "lane_number": edge.lane_number,
+                "source_junction_id": edge.source_junction_id,
+                "target_junction_id": edge.target_junction_id,
+                "lane_count": edge.lane_count,
             },
             "junctions": {
                 "from": from_junction.id if from_junction else None,

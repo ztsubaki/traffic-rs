@@ -1,4 +1,6 @@
-use pyo3::{Py, PyAny, Python, pyclass, pymethods, types::PyAnyMethods};
+use pyo3::{
+    Py, PyAny, Python, exceptions::PyRuntimeError, pyclass, pymethods, types::PyAnyMethods,
+};
 
 use crate::{
     net::TrafficLightID,
@@ -29,8 +31,7 @@ impl Cloud {
         }) {
             return Err(format!("Python Cloud on_tick callback failed: {}", e));
         }
-        self.post_hook(time, v2x);
-        Ok(())
+        self.post_hook(time, v2x)
     }
     pub fn on_message(&mut self, msg: Message, v2x: &mut Channel) -> Result<(), String> {
         let from = match msg.from {
@@ -53,8 +54,7 @@ impl Cloud {
         }) {
             return Err(format!("Python Cloud on_message callback failed: {}", e));
         }
-        self.post_hook(msg.time_arrive, v2x);
-        Ok(())
+        self.post_hook(msg.time_arrive, v2x)
     }
     pub fn on_create(&mut self) -> Result<(), String> {
         if let Err(e) = Python::attach(|py| self.obj.bind(py).call_method0("on_create").map(|_| {}))
@@ -63,17 +63,18 @@ impl Cloud {
         }
         Ok(())
     }
-    fn post_hook(&mut self, time: usize, v2x: &mut Channel) {
-        for message in Python::attach(|py| {
-            self.obj
-                .bind(py)
-                .cast::<CloudBase>()
-                .unwrap()
-                .borrow_mut()
-                .get_messages()
-        }) {
+    fn post_hook(&mut self, time: usize, v2x: &mut Channel) -> Result<(), String> {
+        let messages = Python::attach(|py| {
+            let cloud_base =
+                self.obj.bind(py).cast::<CloudBase>().map_err(|error| {
+                    format!("Python Cloud must inherit from CloudBase: {error}")
+                })?;
+            Ok::<Vec<Message>, String>(cloud_base.borrow_mut().get_messages())
+        })?;
+        for message in messages {
             Message::new(v2x, message.content, message.from, message.to, time);
         }
+        Ok(())
     }
 }
 
@@ -94,8 +95,8 @@ impl CloudBase {
         }
     }
 
-    fn on_tick(&self, _time: usize) {
-        panic!("on_tick for Node not override");
+    fn on_tick(&self, _time: usize) -> pyo3::PyResult<()> {
+        Err(PyRuntimeError::new_err("Cloud.on_tick must be overridden."))
     }
 
     fn on_message(
@@ -104,8 +105,10 @@ impl CloudBase {
         _time_receive: usize,
         _from: Option<TrafficLightID>,
         _content: Py<PyAny>,
-    ) {
-        panic!("on_message for Node not override");
+    ) -> pyo3::PyResult<()> {
+        Err(PyRuntimeError::new_err(
+            "Cloud.on_message must be overridden.",
+        ))
     }
 
     fn send_to_node(&mut self, node_id: TrafficLightID, content: Py<PyAny>) {
@@ -118,8 +121,10 @@ impl CloudBase {
         });
     }
 
-    fn on_create(&self) {
-        panic!("on_create for Node not override");
+    fn on_create(&self) -> pyo3::PyResult<()> {
+        Err(PyRuntimeError::new_err(
+            "Cloud.on_create must be overridden.",
+        ))
     }
 }
 

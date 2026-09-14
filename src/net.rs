@@ -95,9 +95,14 @@ impl Net {
             id: junction_id.to_string_lossy().to_string(),
         });
         let jid = JunctionID::from_usize(self.junctions.len() - 1);
-        self.junction_ids
+        if self
+            .junction_ids
             .insert(junction_id.to_owned(), jid)
-            .map_or_else(|| Ok(jid), |_| unreachable!())
+            .is_some()
+        {
+            return Err(format!("Duplicate junction ID {junction_id:?}."));
+        }
+        Ok(jid)
     }
     fn insert_edge(&mut self, edge: &sumo::Edge) -> Result<EdgeID, String> {
         let edge_id = unsafe { CStr::from_ptr(edge.id) };
@@ -127,14 +132,15 @@ impl Net {
         self.edges.push(Edge {
             id: edge_id.to_string_lossy().to_string(),
             name: edge_name.to_string_lossy().to_string(),
-            from,
-            to,
-            lane_number: edge.lane_number,
+            source_junction_id: from,
+            target_junction_id: to,
+            lane_count: edge.lane_number,
         });
         let eid = EdgeID::from_usize(self.edges.len() - 1);
-        self.edge_ids
-            .insert(edge_id.to_owned(), eid)
-            .map_or_else(|| Ok(eid), |_| unreachable!())
+        if self.edge_ids.insert(edge_id.to_owned(), eid).is_some() {
+            return Err(format!("Duplicate edge ID {edge_id:?}."));
+        }
+        Ok(eid)
     }
     fn insert_lane(&mut self, lane: &sumo::Lane) -> Result<LaneID, String> {
         let lane_id = unsafe { CStr::from_ptr(lane.id) };
@@ -157,12 +163,13 @@ impl Net {
             edge_id: edge,
             length: lane.length,
             links: Vec::new(),
-            trafficlight: HashSet::new(),
+            traffic_light_ids: HashSet::new(),
         });
         let lid = LaneID::from_usize(self.lanes.len() - 1);
-        self.lane_ids
-            .insert(lane_id.to_owned(), lid)
-            .map_or_else(|| Ok(lid), |_| unreachable!())
+        if self.lane_ids.insert(lane_id.to_owned(), lid).is_some() {
+            return Err(format!("Duplicate lane ID {lane_id:?}."));
+        }
+        Ok(lid)
     }
     fn insert_trafficlight(
         &mut self,
@@ -184,68 +191,72 @@ impl Net {
             phases: Vec::new(),
         });
         let tid = TrafficLightID::from_usize(self.trafficlights.len() - 1);
-        self.trafficlight_ids
+        if self
+            .trafficlight_ids
             .insert(trafficlight_id.to_owned(), tid)
-            .map_or_else(|| Ok(tid), |_| unreachable!())
+            .is_some()
+        {
+            return Err(format!("Duplicate traffic light ID {trafficlight_id:?}."));
+        }
+        Ok(tid)
     }
     fn insert_link(&mut self, link: &sumo::Link) -> Result<(), String> {
         let trafficlight_id = unsafe { CStr::from_ptr(link.trafficlight) };
         let from_id = unsafe { CStr::from_ptr(link.from_lane) };
         let from = self.get_lane_id(from_id);
-        if from.is_none() {
-            return Err(format!(
-                "Link references an unknown source lane {:?}",
-                from_id
-            ));
-        }
+        let from =
+            from.ok_or_else(|| format!("Link references an unknown source lane {from_id:?}."))?;
         let via_id = unsafe { CStr::from_ptr(link.via_lane) };
         let via = self.get_lane_id(via_id);
         let to_id = unsafe { CStr::from_ptr(link.to_lane) };
         let to = self.get_lane_id(to_id);
-        if to.is_none() {
-            return Err(format!(
-                "Link references an unknown destination lane {:?}",
-                to_id
-            ));
-        }
+        let to =
+            to.ok_or_else(|| format!("Link references an unknown destination lane {to_id:?}."))?;
         if trafficlight_id.is_empty() {
-            self.get_lane_mut(from.unwrap()).unwrap().links.push(Link {
-                from: from.unwrap(),
-                via,
-                to: to.unwrap(),
+            let lane = self.get_lane_mut(from).ok_or_else(|| {
+                format!("Source lane {from_id:?} disappeared while inserting a link.")
+            })?;
+            lane.links.push(Link {
+                source_lane_id: from,
+                via_lane_id: via,
+                target_lane_id: to,
             });
             self.num_links += 1;
         } else {
-            let trafficlight = self.get_trafficlight_id(trafficlight_id);
-            if trafficlight.is_none() {
-                return Err(format!(
-                    "Link references an unknown traffic light {:?}",
-                    trafficlight_id
-                ));
-            }
-            let tls = self.get_trafficlight_mut(trafficlight.unwrap()).unwrap();
+            let trafficlight = self.get_trafficlight_id(trafficlight_id).ok_or_else(|| {
+                format!("Link references an unknown traffic light {trafficlight_id:?}.")
+            })?;
+            let tls = self.get_trafficlight_mut(trafficlight).ok_or_else(|| {
+                format!("Traffic light {trafficlight_id:?} disappeared while inserting a link.")
+            })?;
             while tls.links.len() <= link.link_index {
                 tls.links.push(Vec::new());
             }
             tls.links[link.link_index].push(Link {
-                from: from.unwrap(),
-                via,
-                to: to.unwrap(),
+                source_lane_id: from,
+                via_lane_id: via,
+                target_lane_id: to,
             });
-            self.get_lane_mut(from.unwrap())
-                .unwrap()
-                .trafficlight
-                .insert(trafficlight.unwrap());
+            self.get_lane_mut(from)
+                .ok_or_else(|| {
+                    format!("Source lane {from_id:?} disappeared while inserting a link.")
+                })?
+                .traffic_light_ids
+                .insert(trafficlight);
             if let Some(v) = via {
                 self.get_lane_mut(v)
-                    .unwrap()
-                    .trafficlight
-                    .insert(trafficlight.unwrap());
+                    .ok_or_else(|| {
+                        format!("Via lane {via_id:?} disappeared while inserting a link.")
+                    })?
+                    .traffic_light_ids
+                    .insert(trafficlight);
             }
-            self.get_lane_mut(to.unwrap())
-                .unwrap()
-                .trafficlight
-                .insert(trafficlight.unwrap());
+            self.get_lane_mut(to)
+                .ok_or_else(|| {
+                    format!("Destination lane {to_id:?} disappeared while inserting a link.")
+                })?
+                .traffic_light_ids
+                .insert(trafficlight);
             self.num_controlled_links += 1;
         }
         Ok(())
@@ -255,28 +266,26 @@ impl Net {
         if trafficlight_id.is_empty() {
             return Err("Phase references an empty traffic light ID".to_string());
         }
-        let trafficlight = self.get_trafficlight_id(trafficlight_id);
-        if trafficlight.is_none() {
-            return Err(format!(
-                "Phase references an unknown traffic light {:?}",
-                trafficlight_id
-            ));
-        }
-        let tls = self.get_trafficlight_mut(trafficlight.unwrap()).unwrap();
+        let trafficlight = self.get_trafficlight_id(trafficlight_id).ok_or_else(|| {
+            format!("Phase references an unknown traffic light {trafficlight_id:?}.")
+        })?;
+        let tls = self.get_trafficlight_mut(trafficlight).ok_or_else(|| {
+            format!("Traffic light {trafficlight_id:?} disappeared while inserting a phase.")
+        })?;
         while tls.phases.len() <= phase.program_index {
             tls.phases.push(Vec::new());
         }
         while tls.phases[phase.program_index].len() <= phase.phase_index {
             tls.phases[phase.program_index].push(Phase {
-                sigs: Signals::empty(),
-                next: Vec::new(),
+                signal_state: Signals::empty(),
+                next_phase_indices: Vec::new(),
             });
         }
         if (!tls.phases[phase.program_index][phase.phase_index]
-            .sigs
+            .signal_state
             .is_empty())
             && (!tls.phases[phase.program_index][phase.phase_index]
-                .next
+                .next_phase_indices
                 .is_empty())
         {
             return Err(format!(
@@ -287,20 +296,20 @@ impl Net {
         let state: String = unsafe { CStr::from_ptr(phase.state) }
             .to_string_lossy()
             .into();
-        let mut next = Vec::new();
+        let mut next_phase_indices = Vec::new();
         if phase.next_count > 0 {
-            next.extend_from_slice(unsafe {
+            next_phase_indices.extend_from_slice(unsafe {
                 std::slice::from_raw_parts(phase.next_indexs, phase.next_count)
             });
         }
-        let sigs = match Signals::from_str(&state) {
+        let signal_state = match Signals::from_str(&state) {
             Ok(s) => s,
             Err(e) => {
                 return Err(format!("Invalid traffic signal state in phase: {}", e));
             }
         };
-        tls.phases[phase.program_index][phase.phase_index].sigs = sigs;
-        tls.phases[phase.program_index][phase.phase_index].next = next;
+        tls.phases[phase.program_index][phase.phase_index].signal_state = signal_state;
+        tls.phases[phase.program_index][phase.phase_index].next_phase_indices = next_phase_indices;
         self.num_phases += 1;
         Ok(())
     }
@@ -308,7 +317,7 @@ impl Net {
         for tls in &self.trafficlights {
             for program in &tls.phases {
                 for phase in program {
-                    if phase.sigs.is_empty() && phase.next.is_empty() {
+                    if phase.signal_state.is_empty() && phase.next_phase_indices.is_empty() {
                         return Err(
                             "Road network contains an empty traffic signal phase".to_string()
                         );
@@ -545,13 +554,13 @@ pub struct Edge {
     pub name: String,
     #[pyo3(get)]
     #[serde(rename = "sourceJunctionId")]
-    pub from: Option<JunctionID>,
+    pub source_junction_id: Option<JunctionID>,
     #[pyo3(get)]
     #[serde(rename = "targetJunctionId")]
-    pub to: Option<JunctionID>,
+    pub target_junction_id: Option<JunctionID>,
     #[pyo3(get)]
     #[serde(rename = "laneCount")]
-    pub lane_number: usize,
+    pub lane_count: usize,
 }
 
 #[derive(Serialize, Clone)]
@@ -575,7 +584,7 @@ pub struct Lane {
     pub links: Vec<Link>,
     #[pyo3(get)]
     #[serde(rename = "trafficLightIds")]
-    pub trafficlight: HashSet<TrafficLightID>,
+    pub traffic_light_ids: HashSet<TrafficLightID>,
 }
 
 #[derive(Serialize, Clone)]
@@ -594,13 +603,13 @@ pub struct TrafficLight {
 pub struct Link {
     #[pyo3(get)]
     #[serde(rename = "fromLaneId")]
-    pub from: LaneID,
+    pub source_lane_id: LaneID,
     #[pyo3(get)]
     #[serde(rename = "viaLaneId")]
-    pub via: Option<LaneID>,
+    pub via_lane_id: Option<LaneID>,
     #[pyo3(get)]
     #[serde(rename = "toLaneId")]
-    pub to: LaneID,
+    pub target_lane_id: LaneID,
 }
 
 #[pyclass(frozen, skip_from_py_object)]
@@ -608,10 +617,10 @@ pub struct Link {
 pub struct Phase {
     #[pyo3(get)]
     #[serde(rename = "signals")]
-    pub sigs: Signals,
+    pub signal_state: Signals,
     #[pyo3(get)]
     #[serde(rename = "nextPhaseIndices")]
-    pub next: Vec<usize>,
+    pub next_phase_indices: Vec<usize>,
 }
 
 #[derive(Clone)]

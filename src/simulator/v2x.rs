@@ -12,10 +12,10 @@ pub struct Channel {
     queue: BinaryHeap<Reverse<Message>>,
     cloud_delay_generator: Normal<f32>,
     rng: StdRng,
-    package_count: Vec<usize>,
-    package_total: usize,
+    packets_per_rsu: Vec<usize>,
+    delivered_packet_count: usize,
     delay_total: usize,
-    package_loss: usize,
+    lost_packet_count: usize,
 }
 
 impl Channel {
@@ -24,65 +24,66 @@ impl Channel {
             queue: BinaryHeap::new(),
             cloud_delay_generator,
             rng: rand::make_rng(),
-            package_count: Vec::new(),
-            package_total: 0,
+            packets_per_rsu: Vec::new(),
+            delivered_packet_count: 0,
             delay_total: 0,
-            package_loss: 0,
+            lost_packet_count: 0,
         }
     }
     pub fn message_count(&self) -> usize {
         self.queue.len()
     }
     pub fn latest_time(&self) -> Option<usize> {
-        self.queue.peek().map(|mesg| mesg.0.time_arrive)
+        self.queue.peek().map(|message| message.0.time_arrive)
     }
-    pub fn push(&mut self, mesg: Message) {
-        if let Communicator::RSU(tls_id) = mesg.to {
-            while self.package_count.len() <= tls_id.to_usize() {
-                self.package_count.push(0);
+    pub fn push(&mut self, message: Message) {
+        if let Communicator::RSU(traffic_light_id) = message.to {
+            while self.packets_per_rsu.len() <= traffic_light_id.to_usize() {
+                self.packets_per_rsu.push(0);
             }
-            self.package_count[tls_id.to_usize()] += 1;
+            self.packets_per_rsu[traffic_light_id.to_usize()] += 1;
         }
-        self.delay_total += mesg.time_arrive - mesg.time_send;
-        self.package_total += 1;
-        self.queue.push(Reverse(mesg));
+        self.delay_total += message.time_arrive - message.time_send;
+        self.delivered_packet_count += 1;
+        self.queue.push(Reverse(message));
     }
     pub fn pop(&mut self) -> Option<Message> {
         match self.queue.pop() {
-            Some(mesg) => {
-                if let Communicator::RSU(tls_id) = mesg.0.to {
-                    while self.package_count.len() <= tls_id.to_usize() {
-                        self.package_count.push(0);
+            Some(message) => {
+                if let Communicator::RSU(traffic_light_id) = message.0.to {
+                    while self.packets_per_rsu.len() <= traffic_light_id.to_usize() {
+                        self.packets_per_rsu.push(0);
                     }
-                    self.package_count[tls_id.to_usize()] -= 1;
+                    self.packets_per_rsu[traffic_light_id.to_usize()] -= 1;
                 }
-                Some(mesg.0)
+                Some(message.0)
             }
             None => None,
         }
     }
-    pub fn get_package_count(&self, tls_id: TrafficLightID) -> usize {
-        if self.package_count.len() <= tls_id.to_usize() {
+    pub fn queued_packet_count(&self, traffic_light_id: TrafficLightID) -> usize {
+        if self.packets_per_rsu.len() <= traffic_light_id.to_usize() {
             0
         } else {
-            self.package_count[tls_id.to_usize()]
+            self.packets_per_rsu[traffic_light_id.to_usize()]
         }
     }
     pub fn get_average_delay(&self) -> f64 {
-        if self.package_total == 0 {
+        if self.delivered_packet_count == 0 {
             0.0
         } else {
-            (self.delay_total as f64) / (self.package_total as f64)
+            (self.delay_total as f64) / (self.delivered_packet_count as f64)
         }
     }
-    pub fn loss_package(&mut self) {
-        self.package_loss += 1;
+    pub fn record_packet_loss(&mut self) {
+        self.lost_packet_count += 1;
     }
-    pub fn get_package_loss(&self) -> f64 {
-        if self.package_total + self.package_loss == 0 {
+    pub fn packet_loss_rate(&self) -> f64 {
+        if self.delivered_packet_count + self.lost_packet_count == 0 {
             0.0
         } else {
-            (self.package_loss as f64) / (self.package_total as f64 + self.package_loss as f64)
+            (self.lost_packet_count as f64)
+                / (self.delivered_packet_count as f64 + self.lost_packet_count as f64)
         }
     }
 }
@@ -110,7 +111,7 @@ impl Message {
                 .sample(&mut channel.rng)
                 .round()
                 .max(1.0) as usize;
-            if !channel.rng.random_bool(CONFIG.cloud_package_loss_rate) {
+            if !channel.rng.random_bool(CONFIG.cloud_packet_loss_rate) {
                 channel.push(Message {
                     from,
                     to,
@@ -119,15 +120,15 @@ impl Message {
                     time_arrive: time_send + delay,
                 });
             } else {
-                channel.loss_package();
+                channel.record_packet_loss();
             }
         } else if matches!(from, Communicator::Vehicle(_)) && matches!(to, Communicator::RSU(_)) {
-            if let Communicator::RSU(tls_id) = to {
-                if channel.get_package_count(tls_id) < CONFIG.rsu_bandwidth {
+            if let Communicator::RSU(traffic_light_id) = to {
+                if channel.queued_packet_count(traffic_light_id) < CONFIG.rsu_bandwidth {
                     let delay = (CONFIG.rsu_delay_min as f64
                         + CONFIG.rsu_delay_k
                             / (1.0
-                                - (channel.get_package_count(tls_id) as f64)
+                                - (channel.queued_packet_count(traffic_light_id) as f64)
                                     / (CONFIG.rsu_bandwidth as f64)))
                         as usize;
                     channel.push(Message {
@@ -138,7 +139,7 @@ impl Message {
                         time_arrive: time_send + delay,
                     });
                 } else {
-                    channel.loss_package();
+                    channel.record_packet_loss();
                 }
             }
         } else {

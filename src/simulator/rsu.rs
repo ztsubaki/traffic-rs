@@ -18,22 +18,30 @@ impl RSU {
     pub fn new() -> RSU {
         RSU { data: Vec::new() }
     }
-    pub fn on_message(&mut self, msg: Message) {
-        let vehicle = Python::attach(|py| msg.content.into_bound(py).cast_into().unwrap().unbind());
-        let time_send = msg.time_send;
-        let time_arrive = msg.time_arrive;
-        let from = msg.from;
-        let to = msg.to;
-        if let Communicator::Vehicle(vehicle_id) = from
-            && let Communicator::RSU(tls_id) = to
+    pub fn on_message(&mut self, message: Message) -> Result<(), String> {
+        let Message {
+            from,
+            to,
+            content,
+            time_send,
+            time_arrive,
+        } = message;
+        if let (Communicator::Vehicle(vehicle_id), Communicator::RSU(traffic_light_id)) = (from, to)
         {
-            while self.data.len() <= tls_id.to_usize() {
+            let vehicle = Python::attach(|py| {
+                content
+                    .into_bound(py)
+                    .cast_into::<Vehicle>()
+                    .map(|vehicle| vehicle.unbind())
+                    .map_err(|error| format!("RSU received an invalid vehicle payload: {error}"))
+            })?;
+            while self.data.len() <= traffic_light_id.to_usize() {
                 self.data.push(HashMap::new());
             }
-            match self.data[tls_id.to_usize()].get(&vehicle_id) {
-                Some(rec) => {
-                    if rec.time_send < time_send {
-                        self.data[tls_id.to_usize()].insert(
+            match self.data[traffic_light_id.to_usize()].get(&vehicle_id) {
+                Some(record) => {
+                    if record.time_send < time_send {
+                        self.data[traffic_light_id.to_usize()].insert(
                             vehicle_id,
                             Record {
                                 vehicle,
@@ -44,7 +52,7 @@ impl RSU {
                     }
                 }
                 None => {
-                    self.data[tls_id.to_usize()].insert(
+                    self.data[traffic_light_id.to_usize()].insert(
                         vehicle_id,
                         Record {
                             vehicle,
@@ -54,8 +62,12 @@ impl RSU {
                     );
                 }
             }
+            Ok(())
         } else {
-            unreachable!();
+            Err(
+                "RSU received a message that was not addressed from a vehicle to an RSU."
+                    .to_owned(),
+            )
         }
     }
     pub fn report(&mut self, channel: &mut Channel, time: usize) {
